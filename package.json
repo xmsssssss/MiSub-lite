@@ -1,0 +1,40 @@
+{
+  "name": "misub-lite",
+  "version": "2.7.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "server": "node --experimental-sqlite server/index.js",
+    "start": "node --experimental-sqlite server/index.js",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest --passWithNoTests",
+    "test:run": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.6",
+    "express": "^5.2.1",
+    "js-yaml": "^4.1.0",
+    "pinia": "^3.0.3",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.18",
+    "vue-router": "^4.6.4",
+    "vuedraggable": "^4.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/express": "^5.0.6",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^20.0.11",
+    "tailwindcss": "^4.1.12",
+    "terser": "^5.48.0",
+    "vite": "^7.1.2",
+    "vitest": "^4.0.16"
+  }
+}

@@ -1,0 +1,42 @@
+# MiSub-lite 配置
+# 复制为 config.yaml 后修改：
+#   copy config.example.yaml config.yaml
+#
+# 优先级：环境变量 > config.yaml > 默认值
+
+host: "0.0.0.0"
+port: 8787
+
+adminPassword: "change-me"
+cookieSecret: ""
+
+publicUrl: ""
+callbackUrl: ""
+corsOrigins: ""
+
+dbPath: ""
+dataDir: ""
+staticDir: ""
+
+enableCron: true
+cronType: "hourly-subscription-sync"
+cronMaxSyncCount: 50
+cronSyncTimeout: 30000
+cronEnableParallel: true
+
+telegramBotToken: ""
+telegramChatId: ""
+telegramPushBotToken: ""
+telegramPushWebhookSecret: ""
+telegramPushAllowedUsers: ""
+
+errorReportUrl: ""
+
+siteName: "MiSub-lite"
+repoUrl: "https://github.com/xmsssssss/MiSub-lite"
+subscriptionToken: "auto"
+profileToken: "profiles"
+customLoginPath: "login"
+enablePublicPage: false
+enableAccessLog: false
+storageType: "d1"
