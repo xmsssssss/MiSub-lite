@@ -5,23 +5,19 @@ services:
     container_name: misub-lite
     restart: unless-stopped
     ports:
-      - "${PORT:-8787}:8787"
+      - "8787:8787"
     environment:
       HOST: "0.0.0.0"
       PORT: "8787"
-      # 可选：直接设密码（也可用挂载的 config.yaml / 首次引导页）
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      COOKIE_SECRET: ${COOKIE_SECRET:-}
-      MISUB_PUBLIC_URL: ${MISUB_PUBLIC_URL:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      ADMIN_PASSWORD: "admin"
+      COOKIE_SECRET: ""
+      MISUB_PUBLIC_URL: ""
+      CORS_ORIGINS: ""
       MISUB_DATA_DIR: /app/data
       MISUB_DB_PATH: /app/data/misub.sqlite
       MISUB_STATIC_DIR: /app/dist
     volumes:
-      # 持久化 SQLite 与运行数据
       - misub-data:/app/data
-      # 可选：挂载本地配置（取消下一行注释）
-      # - ./config.yaml:/app/config.yaml:ro
     healthcheck:
       test:
         [
