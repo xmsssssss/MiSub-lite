@@ -113,7 +113,8 @@ export async function csrfOriginMiddleware(request, next, options = {}) {
         return new Response('Origin Required', { status: 403 });
     }
 
-    const requestOrigin = new URL(request.url).origin;
+    const requestUrl = new URL(request.url);
+    const requestOrigin = requestUrl.origin;
     const origins = Array.isArray(options.origins) && options.origins.length ? options.origins : [requestOrigin];
     const allowed = new Set(origins);
     let sourceOrigin = '';
@@ -125,6 +126,17 @@ export async function csrfOriginMiddleware(request, next, options = {}) {
 
     if (sourceOrigin === requestOrigin || allowed.has(sourceOrigin)) {
         return next();
+    }
+
+    // Reverse proxy: browser Origin is https://domain, internal request may be http://domain
+    try {
+        const sourceHost = new URL(sourceOrigin).hostname;
+        const requestHost = requestUrl.hostname;
+        if (sourceHost && requestHost && sourceHost === requestHost) {
+            return next();
+        }
+    } catch (_) {
+        // fall through
     }
 
     return new Response('Origin Not Allowed', { status: 403 });

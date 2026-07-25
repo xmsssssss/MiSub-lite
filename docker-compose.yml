@@ -9,8 +9,10 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8787"
-      ADMIN_PASSWORD: "admin"
+      # 留空则首次打开引导页设密码；写了则直接用该密码登录（不再走引导）
+      ADMIN_PASSWORD: ""
       COOKIE_SECRET: ""
+      # 有域名反代时建议填写，例如 https://sub.xmser.ru
       MISUB_PUBLIC_URL: ""
       CORS_ORIGINS: ""
       MISUB_DATA_DIR: /app/data
