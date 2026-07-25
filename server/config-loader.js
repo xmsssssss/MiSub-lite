@@ -136,12 +136,9 @@ export function buildInitialSettingsFromConfig(config = {}) {
     if (typeof config.enablePublicPage === 'boolean') settings.enablePublicPage = config.enablePublicPage;
     if (typeof config.enableAccessLog === 'boolean') settings.enableAccessLog = config.enableAccessLog;
 
-    if (config.storageType) {
-        const st = String(config.storageType).toLowerCase();
-        settings.storageType = (st === 'sqlite' || st === 'd1') ? 'd1' : st;
-    } else {
-        settings.storageType = 'd1';
-    }
+    // Local runtime always uses SQLite via D1-compatible adapter.
+    // Accept legacy "d1" in old configs; never seed "kv".
+    settings.storageType = 'sqlite';
 
     return settings;
 }

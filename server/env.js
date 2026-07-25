@@ -39,7 +39,7 @@ async function seedSettingsIfEmpty(db, config = {}) {
 
         const initial = buildInitialSettingsFromConfig(config);
         if (!Object.keys(initial).length) {
-            initial.storageType = 'd1';
+            initial.storageType = 'sqlite';
             initial.FileName = 'MiSub-lite';
         }
 

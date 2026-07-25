@@ -633,11 +633,16 @@ export class StorageFactory {
      * @returns {KVStorageAdapter|D1StorageAdapter}
      */
     static createAdapter(env, storageType = STORAGE_TYPES.KV) {
-        switch (storageType) {
-            case STORAGE_TYPES.D1:
+        const normalized =
+            storageType === STORAGE_TYPES.D1 || storageType === 'd1'
+                ? STORAGE_TYPES.SQLITE
+                : storageType;
+
+        switch (normalized) {
             case STORAGE_TYPES.SQLITE:
+            case STORAGE_TYPES.D1:
                 if (!env.MISUB_DB) {
-                    console.warn('[Storage] D1/SQLite database not available, falling back to KV');
+                    console.warn('[Storage] SQLite database not available, falling back to KV');
                     const kvFallback = StorageFactory.resolveKV(env);
                     if (!kvFallback) {
                         console.warn('[Storage] KV not available either, using noop adapter');
@@ -645,18 +650,18 @@ export class StorageFactory {
                     }
                     return new KVStorageAdapter(kvFallback);
                 }
+                // Reuse row-level SQL adapter (originally written for Cloudflare D1 API)
                 return new D1StorageAdapter(env.MISUB_DB);
 
             case STORAGE_TYPES.KV:
             default: {
-                // Local Node runtime exposes MISUB_DB (SQLite) without KV.
                 if (env?.MISUB_RUNTIME === 'node-local' && env?.MISUB_DB) {
                     return new D1StorageAdapter(env.MISUB_DB);
                 }
                 const kv = StorageFactory.resolveKV(env);
                 if (!kv) {
                     if (env?.MISUB_DB) {
-                        console.warn('[Storage] No KV binding found, using D1/SQLite adapter');
+                        console.warn('[Storage] No KV binding found, using SQLite adapter');
                         return new D1StorageAdapter(env.MISUB_DB);
                     }
                     console.warn('[Storage] No KV binding found, using noop adapter');
@@ -675,23 +680,25 @@ export class StorageFactory {
      */
     static async getStorageType(env) {
         try {
+            // Node local / SQLite: always use SQL adapter (same code path as legacy "d1")
             if (env?.MISUB_RUNTIME === 'node-local' && env?.MISUB_DB) {
-                return STORAGE_TYPES.D1;
+                return STORAGE_TYPES.SQLITE;
             }
             const settings = await SettingsCache.get(env);
             if (settings?.storageType) {
-                if (settings.storageType === STORAGE_TYPES.SQLITE) {
-                    return STORAGE_TYPES.D1;
+                const st = String(settings.storageType).toLowerCase();
+                if (st === STORAGE_TYPES.SQLITE || st === STORAGE_TYPES.D1) {
+                    return STORAGE_TYPES.SQLITE;
                 }
                 return settings.storageType;
             }
             if (env?.MISUB_DB && !StorageFactory.resolveKV(env)) {
-                return STORAGE_TYPES.D1;
+                return STORAGE_TYPES.SQLITE;
             }
             return STORAGE_TYPES.KV;
         } catch (error) {
             console.error('[Storage] Failed to get storage type:', error);
-            return env?.MISUB_DB ? STORAGE_TYPES.D1 : STORAGE_TYPES.KV;
+            return env?.MISUB_DB ? STORAGE_TYPES.SQLITE : STORAGE_TYPES.KV;
         }
     }
 

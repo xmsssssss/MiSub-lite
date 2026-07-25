@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS = {
     enableTrafficNode: false,
     enableFlagEmoji: true,
     enablePublicPage: true,
-    storageType: 'kv',
+    storageType: 'sqlite',
     // 新增：借鉴Sub-Store和miaomiaowu的功能
     enableSubscriptionSync: true,      // 启用订阅同步
     subscriptionCacheExpireMinutes: 60, // 订阅缓存过期时间（分钟）

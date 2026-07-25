@@ -762,7 +762,7 @@ export async function handleSetupRequest(request, env) {
         if (typeof body?.enableAccessLog === 'boolean') {
             settingsPatch.enableAccessLog = body.enableAccessLog;
         }
-        settingsPatch.storageType = 'd1';
+        settingsPatch.storageType = 'sqlite';
 
         if (Object.keys(settingsPatch).length > 0) {
             const storageAdapter = await getStorageAdapter(env);

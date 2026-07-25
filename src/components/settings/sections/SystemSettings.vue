@@ -158,34 +158,9 @@ const emit = defineEmits(['migrate']);
                 </div>
             </div>
             <div class="space-y-3">
-                <div class="flex items-center">
-                    <input type="radio" value="kv" v-model="settings.storageType" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-600 dark:bg-gray-800">
-                    <span class="ml-3 text-sm dark:text-gray-300">{{ t('systemSettings.kvStorage') }}</span>
-                </div>
-                <div class="flex items-center">
-                    <input type="radio" value="d1" v-model="settings.storageType" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-600 dark:bg-gray-800">
-                    <span class="ml-3 text-sm dark:text-gray-300">{{ t('systemSettings.d1DatabaseRecommended') }}</span>
-                </div>
-
-                <div v-if="settings.storageType === 'kv'" class="mt-4 p-4 bg-blue-50/80 dark:bg-blue-900/20 misub-radius-lg border border-blue-100/80 dark:border-blue-800/60">
-                    <h4 class="text-sm font-medium text-blue-800 dark:text-blue-300 mb-2">{{ t('systemSettings.migrateToD1') }}</h4>
-                    <p class="text-xs text-blue-600 dark:text-blue-400 mb-3">{{ t('systemSettings.d1MigrationDesc') }}</p>
-                    <ol class="list-decimal list-inside text-xs text-blue-600 dark:text-blue-400 mb-3 space-y-1">
-                        <li><span v-html="t('systemSettings.d1StepCreate')"></span></li>
-                        <li><span v-html="t('systemSettings.d1StepSchema')"></span></li>
-                        <li>{{ t('systemSettings.d1StepMigrate') }}</li>
-                    </ol>
-                    <div class="flex flex-col sm:flex-row gap-3">
-                        <button @click="emit('migrate')" class="px-4 py-2 text-sm font-medium text-white misub-radius-lg transition-colors duration-200 bg-blue-600 hover:bg-blue-700 flex items-center justify-center min-w-[120px] shadow-sm">
-                            {{ t('systemSettings.startMigration') }}
-                        </button>
-                        <button @click="copySchema" class="px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-white/80 dark:bg-gray-900/60 border border-blue-200 dark:border-blue-700/70 misub-radius-lg hover:bg-blue-50 dark:hover:bg-blue-900/40 transition-colors flex items-center justify-center gap-2 shadow-sm">
-                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                            </svg>
-                            {{ t('systemSettings.copySchemaSql') }}
-                        </button>
-                    </div>
+                <div class="rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-4 dark:border-emerald-800/60 dark:bg-emerald-900/20">
+                    <p class="text-sm font-medium text-emerald-800 dark:text-emerald-300">{{ t('systemSettings.sqliteStorage') }}</p>
+                    <p class="mt-1 text-xs text-emerald-700/90 dark:text-emerald-400/90" v-html="t('systemSettings.sqliteStorageDesc')"></p>
                 </div>
             </div>
         </div>

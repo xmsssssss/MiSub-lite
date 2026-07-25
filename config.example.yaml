@@ -39,4 +39,4 @@ profileToken: "profiles"
 customLoginPath: "login"
 enablePublicPage: false
 enableAccessLog: false
-storageType: "d1"
+storageType: "sqlite"
