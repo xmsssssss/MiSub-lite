@@ -29,7 +29,6 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server ./server
 COPY functions ./functions
-COPY schema.sql ./
 COPY config.example.yaml ./
 COPY --from=build /app/dist ./dist
 
