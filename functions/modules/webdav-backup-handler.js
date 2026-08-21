@@ -258,6 +258,31 @@ function joinWebdavPath(base, path) {
     return [trimmedBase, ...parts].join('/');
 }
 
+function decodeWebdavPathSegment(segment) {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return segment;
+    }
+}
+
+function normalizeWebdavHref(endpoint, href) {
+    const endpointUrl = new URL(endpoint);
+    const hrefUrl = new URL(String(href || '').replace(/&amp;/gi, '&'), `${endpointUrl.origin}/`);
+
+    // A PROPFIND response can contain absolute URLs. Never turn a URL from a
+    // different origin into a path that will later be fetched with credentials.
+    if (hrefUrl.origin !== endpointUrl.origin) return null;
+
+    const endpointPath = endpointUrl.pathname.replace(/\/+$/, '');
+    const hrefPath = hrefUrl.pathname;
+    if (hrefPath !== endpointPath && !hrefPath.startsWith(`${endpointPath}/`)) return null;
+
+    const relativePath = hrefPath.slice(endpointPath.length);
+    const decodedParts = relativePath.split('/').filter(Boolean).map(decodeWebdavPathSegment);
+    return decodedParts.length ? `/${decodedParts.join('/')}` : '/';
+}
+
 function toBasicAuth(username, password) {
     const raw = `${username || ''}:${password || ''}`;
     if (typeof btoa === 'function') {
@@ -432,9 +457,9 @@ export async function listWebdavBackupFiles(env) {
 
     const xml = await response.text();
     const hrefs = Array.from(xml.matchAll(/<[^:>]*:?href[^>]*>([^<]+)<\/[^:>]*:?href>/gi))
-        .map(match => decodeURIComponent(match[1] || ''));
+        .map(match => normalizeWebdavHref(config.endpoint, match[1]))
+        .filter(Boolean);
     const files = hrefs
-        .map(href => href.replace(/^https?:\/\/[^/]+/i, ''))
         .filter(href => href.endsWith('.json') && href.includes(BACKUP_FILENAME_PREFIX))
         .map(href => ({
             path: href,

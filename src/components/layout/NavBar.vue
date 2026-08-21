@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useUIStore } from '../../stores/ui.js';
@@ -97,7 +97,7 @@ function isActive(path) {
   <nav
     v-if="isLoggedIn"
     :aria-label="t('nav.bottom')"
-    class="md:hidden mobile-nav-glass z-[60]"
+    class="md:hidden mobile-nav-glass"
   >
     <div class="mobile-nav-inner">
       <router-link
