@@ -53,4 +53,14 @@ describe('Hysteria2 realm support', () => {
             'stun-servers': ['stun.sip.us:3478', 'stun.nextcloud.com:3478']
         });
     });
+
+    it('parses handshake-timeout parameter into the proxy object', () => {
+        const proxy = urlToClashProxy('hysteria2://password@1.2.3.4:443?insecure=1&handshake-timeout=15000#Hy2Timeout');
+        expect(proxy['handshake-timeout']).toBe(15000);
+    });
+
+    it('omits handshake-timeout when the parameter is absent', () => {
+        const proxy = urlToClashProxy('hysteria2://password@1.2.3.4:443?insecure=1#Hy2NoTimeout');
+        expect(proxy).not.toHaveProperty('handshake-timeout');
+    });
 });

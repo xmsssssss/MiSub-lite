@@ -9,6 +9,7 @@ export const DEFAULT_SETTINGS = {
     FileName: 'MiSub-lite',
     mytoken: 'auto',
     profileToken: 'profiles',
+    defaultLocale: 'zh-CN',
     transformConfigMode: 'builtin',
     transformConfig: '',
     ruleLevel: 'std',
