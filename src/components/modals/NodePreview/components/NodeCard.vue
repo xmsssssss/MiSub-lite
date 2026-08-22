@@ -1,5 +1,6 @@
 <script setup>
 import { useI18n } from '@/i18n/index.js';
+import Switch from '@/components/ui/Switch.vue';
 
 const props = defineProps({
   nodes: {
@@ -30,16 +31,26 @@ const props = defineProps({
   testResults: {
     type: Object,
     default: () => ({})
+  },
+  showSwitches: {
+    type: Boolean,
+    default: false
+  },
+  enabledMap: {
+    type: Object,
+    default: () => ({})
   }
 });
 
-const emit = defineEmits(['copy', 'toggle-select', 'test-node']);
+const emit = defineEmits(['copy', 'toggle-select', 'test-node', 'toggle-node']);
 
 const { t } = useI18n();
 
 const getTestState = (url) => props.testResults?.[url] || null;
 
 const isNodeTesting = (url) => getTestState(url)?.state === 'testing';
+
+const isNodeEnabled = (url) => props.enabledMap?.[url] ?? true;
 
 const latencyClass = (state) => {
   if (!state) return '';
@@ -77,7 +88,8 @@ const handleCardClick = (node) => {
         class="flex items-center justify-between rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition-all active:scale-[0.98] dark:border-white/5 dark:bg-white/5"
         :class="{ 
           'bg-indigo-50/50 ring-2 ring-indigo-500/20 dark:bg-indigo-500/10': selectionMode && selectedUrls.has(node.url),
-          'cursor-pointer': selectionMode
+          'cursor-pointer': selectionMode,
+          'opacity-40 saturate-0': showSwitches && !selectionMode && !isNodeEnabled(node.url)
         }"
       >
         <!-- 左侧：图标与信息 -->
@@ -118,7 +130,13 @@ const handleCardClick = (node) => {
         </div>
 
         <!-- 右侧：操作按钮 -->
-        <div v-if="!selectionMode" class="flex items-center gap-2 flex-shrink-0">
+        <div v-if="!selectionMode" class="flex items-center gap-1.5 flex-shrink-0">
+          <Switch
+            v-if="showSwitches"
+            :model-value="isNodeEnabled(node.url)"
+            class="scale-[0.72] origin-right -mr-1"
+            @update:model-value="emit('toggle-node', node, $event)"
+          />
           <button
             @click.stop="emit('test-node', node)"
             :disabled="isNodeTesting(node.url)"
@@ -158,6 +176,7 @@ const handleCardClick = (node) => {
         class="relative bg-white dark:bg-gray-800 rounded-3xl border border-gray-100 dark:border-white/5 p-6 group transition-all duration-500"
         :class="[
           selectionMode ? 'cursor-pointer' : '',
+          !selectionMode && showSwitches && !isNodeEnabled(node.url) ? 'opacity-40 saturate-0' : '',
           selectionMode && selectedUrls.has(node.url) 
             ? 'ring-2 ring-indigo-500 border-transparent bg-indigo-50/30 dark:bg-indigo-500/10' 
             : 'hover:shadow-2xl hover:translate-y-[-4px] hover:border-indigo-100 dark:hover:border-indigo-500/30 shadow-sm'
@@ -214,8 +233,14 @@ const handleCardClick = (node) => {
                 </div>
               </div>
 
-              <!-- 测速 + 复制按钮 (Floating when hovered, only in non-selection mode) -->
+              <!-- 开关 + 测速 + 复制按钮 (Floating when hovered, only in non-selection mode) -->
               <div v-if="!selectionMode" class="flex items-center gap-1.5">
+                <Switch
+                  v-if="showSwitches"
+                  :model-value="isNodeEnabled(node.url)"
+                  class="opacity-0 group-hover:opacity-100 scale-[0.72] origin-right -mr-1 transition-opacity"
+                  @update:model-value="emit('toggle-node', node, $event)"
+                />
                 <button
                   @click.stop="emit('test-node', node)"
                   :disabled="isNodeTesting(node.url)"

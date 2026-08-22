@@ -4,6 +4,7 @@ import { parseNodeInfo } from '../utils/geo-utils.js';
 import { calculateProtocolStats, calculateRegionStats } from '../utils/node-parser.js';
 import { KV_KEY_SUBS } from '../config.js';
 import { fetchSubscriptionNodes } from './node-fetcher.js';
+import { getDisabledNodeSet } from '../../services/subscription-service.js';
 
 /**
  * 处理单个订阅模式的节点获取
@@ -56,14 +57,22 @@ export async function handleSingleSubscriptionMode(request, env, subscriptionId,
     // HTTP订阅：获取节点
     const result = await fetchSubscriptionNodes(subscription.url, subscription.name, userAgent, subscription.customUserAgent, false, subscription.exclude, subscription.fetchProxy, skipCertVerify, Boolean(subscription?.plusAsSpace), subscription?.enableNodeCache === true);
 
+    // [节点开关] 为每个节点附加启用状态（被禁用的节点仍在预览中展示，便于重新开启）
+    const disabledNodeSet = getDisabledNodeSet(subscription);
+    const annotatedNodes = result.nodes.map(node => ({
+        ...node,
+        enabled: !disabledNodeSet.has(node.url)
+    }));
+    result.nodes = annotatedNodes;
+
     return {
         success: true,
         subscriptions: [result],
-        nodes: result.nodes,
-        totalCount: result.nodes.length,
+        nodes: annotatedNodes,
+        totalCount: annotatedNodes.length,
         stats: {
-            protocols: calculateProtocolStats(result.nodes),
-            regions: calculateRegionStats(result.nodes)
+            protocols: calculateProtocolStats(annotatedNodes),
+            regions: calculateRegionStats(annotatedNodes)
         }
     };
 }

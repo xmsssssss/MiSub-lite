@@ -117,9 +117,13 @@ const testSingleNode = async (node) => {
     applyTestResult(node.url, { state: 'fail', error: 'no_result' });
     return;
   }
-  applyTestResult(node.url, r.ok
-    ? { state: 'ok', latency: r.latency }
-    : { state: 'fail', error: r.error || '', unsupported: !!r.unsupported });
+  if (r.ok) {
+    applyTestResult(node.url, { state: 'ok', latency: r.latency });
+  } else {
+    applyTestResult(node.url, { state: 'fail', error: r.error || '', unsupported: !!r.unsupported });
+    // 测速失败自动关闭节点开关
+    autoDisableFailedUrls([r]);
+  }
 };
 
 // 批量测速当前筛选出的节点
@@ -133,6 +137,7 @@ const testAllNodes = async () => {
   batchProgress.value = { done: 0, total: targets.length };
 
   let okCount = 0;
+  let failCount = 0;
   try {
     for (let i = 0; i < targets.length; i += TEST_BATCH_SIZE) {
       if (batchCancelFlag.value) break;
@@ -143,6 +148,7 @@ const testAllNodes = async () => {
       chunk.forEach(url => {
         const r = resultMap.get(url);
         if (r?.ok) okCount += 1;
+        else failCount += 1;
         applyTestResult(url, r
           ? (r.ok
             ? { state: 'ok', latency: r.latency }
@@ -152,7 +158,13 @@ const testAllNodes = async () => {
       batchProgress.value = { ...batchProgress.value, done: Math.min(i + TEST_BATCH_SIZE, targets.length) };
     }
     if (!batchCancelFlag.value) {
-      showToast(t('nodePreview.testDoneSummary', { ok: okCount, total: targets.length }), 'success');
+      // 自动关闭测速失败的节点（不含 QUIC 等无法测速的协议）
+      const disabledCount = autoDisableFailedUrls(
+        Object.entries(testResults.value)
+          .filter(([, v]) => v.state === 'fail')
+          .map(([url, v]) => ({ nodeUrl: url, unsupported: v.unsupported, error: v.error }))
+      );
+      showToast(t('nodePreview.testDoneSummary', { ok: okCount, total: targets.length, count: disabledCount }), 'success');
     }
   } finally {
     batchTesting.value = false;
@@ -162,6 +174,72 @@ const testAllNodes = async () => {
 
 const cancelBatchTest = () => {
   batchCancelFlag.value = true;
+};
+
+// 节点开关状态: url -> boolean（默认开启；仅机场订阅预览模式显示）
+const nodeEnabledMap = ref({});
+const showNodeSwitches = computed(() => Boolean(props.subscriptionId) && !props.profileId);
+
+const isNodeEnabled = (url) => nodeEnabledMap.value[url] ?? true;
+
+const applyNodeEnabled = (url, value) => {
+  const next = { ...nodeEnabledMap.value };
+  next[url] = value;
+  nodeEnabledMap.value = next;
+};
+
+let togglePersistTimer = null;
+
+// 将禁用列表写入 dataStore 中的订阅对象并防抖持久化
+const persistDisabledNodes = () => {
+  if (togglePersistTimer) clearTimeout(togglePersistTimer);
+  togglePersistTimer = setTimeout(async () => {
+    togglePersistTimer = null;
+    try {
+      await dataStore.saveData();
+    } catch (err) {
+      // saveData 内部已统一提示保存失败，这里仅避免未处理的 Promise 拒绝
+      if (isDev) console.debug('[Preview] Persist node state failed:', err);
+    }
+  }, 600);
+};
+
+const setNodesEnabled = (urls, value) => {
+  const sub = dataStore.subscriptions.find(s => s.id === props.subscriptionId);
+  if (!sub) return 0;
+  const set = new Set(Array.isArray(sub.disabledNodes) ? sub.disabledNodes : []);
+  let changed = 0;
+  urls.forEach(url => {
+    if (!url) return;
+    applyNodeEnabled(url, value);
+    if (value) {
+      if (set.delete(url)) changed += 1;
+    } else if (!set.has(url)) {
+      set.add(url);
+      changed += 1;
+    }
+  });
+  if (changed > 0) {
+    sub.disabledNodes = Array.from(set);
+    persistDisabledNodes();
+  }
+  return changed;
+};
+
+// 手动切换节点开关
+const toggleNodeEnabled = (node, value) => {
+  setNodesEnabled([node?.url], Boolean(value));
+};
+
+// 测速结束后自动关闭失败的节点
+const autoDisableFailedUrls = (failedResults) => {
+  if (!showNodeSwitches.value) return 0;
+  const urls = failedResults
+    .filter(r => r && r.nodeUrl && !r.unsupported && r.error !== 'udp_protocol')
+    .map(r => r.nodeUrl)
+    .filter(url => isNodeEnabled(url));
+  if (urls.length === 0) return 0;
+  return setNodesEnabled(urls, false);
 };
 
 const toggleNodeSelection = (url) => {
@@ -291,6 +369,7 @@ const resetState = () => {
   pickingMode.value = false;
   selectedUrls.value.clear();
   testResults.value = {};
+  nodeEnabledMap.value = {};
   batchTesting.value = false;
   batchCancelFlag.value = true; // 中断可能仍在进行的批量测速
 };
@@ -369,6 +448,13 @@ const loadNodes = async () => {
     allNodes.value = data.nodes || [];
     protocolStats.value = data.stats?.protocols || {};
     regionStats.value = data.stats?.regions || {};
+
+    // 初始化节点开关状态（后端已按订阅的 disabledNodes 标注 enabled）
+    const enabledMap = {};
+    allNodes.value.forEach(n => {
+      if (n?.url) enabledMap[n.url] = n.enabled !== false;
+    });
+    nodeEnabledMap.value = enabledMap;
 
     // 更新可用筛选选项
     // 协议类型按常见程度排序
@@ -754,9 +840,12 @@ const goToPage = (page) => {
               :selection-mode="pickingMode"
               :selected-urls="selectedUrls"
               :test-results="testResults"
+              :show-switches="showNodeSwitches && !pickingMode"
+              :enabled-map="nodeEnabledMap"
               @copy="copyNodeUrl"
               @toggle-select="toggleNodeSelection"
               @test-node="testSingleNode"
+              @toggle-node="toggleNodeEnabled"
             />
 
             <!-- 卡片视图 container -->
@@ -769,9 +858,12 @@ const goToPage = (page) => {
               :selection-mode="pickingMode"
               :selected-urls="selectedUrls"
               :test-results="testResults"
+              :show-switches="showNodeSwitches && !pickingMode"
+              :enabled-map="nodeEnabledMap"
               @copy="copyNodeUrl"
               @toggle-select="toggleNodeSelection"
               @test-node="testSingleNode"
+              @toggle-node="toggleNodeEnabled"
             />
           </div>
         </div>

@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useVirtualScroll } from '@/composables/useVirtualScroll.js';
 import { useI18n } from '@/i18n/index.js';
+import Switch from '@/components/ui/Switch.vue';
 
 const props = defineProps({
   nodes: {
@@ -32,16 +33,26 @@ const props = defineProps({
   testResults: {
     type: Object,
     default: () => ({})
+  },
+  showSwitches: {
+    type: Boolean,
+    default: false
+  },
+  enabledMap: {
+    type: Object,
+    default: () => ({})
   }
 });
 
-const emit = defineEmits(['copy', 'toggle-select', 'test-node']);
+const emit = defineEmits(['copy', 'toggle-select', 'test-node', 'toggle-node']);
 
 const { t } = useI18n();
 
 const getTestState = (url) => props.testResults?.[url] || null;
 
 const isNodeTesting = (url) => getTestState(url)?.state === 'testing';
+
+const isNodeEnabled = (url) => props.enabledMap?.[url] ?? true;
 
 const latencyClass = (state) => {
   if (!state) return '';
@@ -100,13 +111,17 @@ const handleRowClick = (node) => {
           <!-- 数据行 - 虚拟滚动 -->
           <div class="bg-white dark:bg-gray-800" :style="{ height: totalHeight + 'px', position: 'relative' }">
             <div :style="{ transform: `translateY(${offsetY}px)` }">
-              <div
-                v-for="node in visibleItems.items"
-                :key="`${node.url}_${node._virtualIndex}`"
-                @click="handleRowClick(node)"
-                class="group border-b border-gray-50 dark:border-white/5 hover:bg-gray-50/80 dark:hover:bg-indigo-500/5 transition-all"
-                :class="{ 'bg-indigo-50/30 dark:bg-indigo-500/10': selectionMode && selectedUrls.has(node.url), 'cursor-pointer': selectionMode }"
-              >
+                <div
+                  v-for="node in visibleItems.items"
+                  :key="`${node.url}_${node._virtualIndex}`"
+                  @click="handleRowClick(node)"
+                  class="group border-b border-gray-50 dark:border-white/5 hover:bg-gray-50/80 dark:hover:bg-indigo-500/5 transition-all"
+                  :class="{
+                    'bg-indigo-50/30 dark:bg-indigo-500/10': selectionMode && selectedUrls.has(node.url),
+                    'cursor-pointer': selectionMode,
+                    'opacity-40 saturate-0': showSwitches && !selectionMode && !isNodeEnabled(node.url)
+                  }"
+                >
                 <div class="grid min-h-[3.5rem] grid-cols-12 gap-2 px-6 py-3 items-center">
                   <!-- Checkbox (Selection Mode Only) -->
                   <div v-if="selectionMode" class="col-span-1 flex justify-center">
@@ -159,6 +174,13 @@ const handleRowClick = (node) => {
 
                   <!-- 操作 (所有设备) -->
                   <div class="col-span-2 flex items-center justify-center gap-1.5">
+                    <Switch
+                      v-if="showSwitches && !selectionMode"
+                      :model-value="isNodeEnabled(node.url)"
+                      :title="isNodeEnabled(node.url) ? t('nodePreview.disableNode') : t('nodePreview.enableNode')"
+                      class="scale-[0.72] origin-right -mr-1"
+                      @update:model-value="emit('toggle-node', node, $event)"
+                    />
                     <span
                       v-if="getTestState(node.url) && !isNodeTesting(node.url)"
                       class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold tabular-nums"

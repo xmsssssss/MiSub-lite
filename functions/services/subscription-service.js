@@ -270,6 +270,16 @@ function ensureArray(data) {
 }
 
 /**
+ * 获取订阅内被禁用节点的 URL 集合（节点开关功能）
+ * @param {Object} sub - 订阅对象
+ * @returns {Set<string>} 被禁用的节点 URL 集合
+ */
+export function getDisabledNodeSet(sub) {
+    const list = ensureArray(sub?.disabledNodes);
+    return new Set(list.filter(u => typeof u === 'string' && u.trim()));
+}
+
+/**
  * 并发控制器 - 限制同时进行的请求数量
  * @param {number} limit - 最大并发数
  * @returns {Function} - 包装函数
@@ -495,29 +505,40 @@ const prependGroupName = profilePrefixSettings?.prependGroupName ?? false;
 
             let validNodes = fallbackParsedObjects.map(node => node.url);
 
+            // [节点开关] 过滤该订阅中被用户禁用的节点（按节点 URL 精确匹配）
+            const disabledNodeSet = getDisabledNodeSet(sub);
+            let disabledRemovedCount = 0;
+            if (disabledNodeSet.size > 0) {
+                const beforeDisabledFilter = validNodes.length;
+                validNodes = validNodes.filter(url => !disabledNodeSet.has(url));
+                disabledRemovedCount = beforeDisabledFilter - validNodes.length;
+            }
+
             // --- 统一转换治理 (算子 + 过滤 + 组级诊断) ---
             validNodes = await applySubscriptionTransforms(validNodes, sub);
 
             const realNodes = validNodes.filter(isRealProxyNode);
+            // 骤降保护需排除"用户主动禁用"的数量，否则大量禁用节点会误触发保护
+            const fetchedTotalCount = realNodes.length + disabledRemovedCount;
             const knownNodeCount = Math.max(
                 Number(sub?.lastGoodNodeCount) || 0,
                 Number(sub?.nodeCount) || 0
             );
-            if (Number.isFinite(knownNodeCount) && isSuspiciousNodeCountDrop(knownNodeCount, realNodes.length)) {
+            if (Number.isFinite(knownNodeCount) && isSuspiciousNodeCountDrop(knownNodeCount, fetchedTotalCount)) {
                 const cachedNodes = await readCachedNodes();
-                console.warn(`[Subscription] Rejecting suspicious node-count drop for ${sub.id || sub.url} (${knownNodeCount} known -> ${realNodes.length} fetched)`);
+                console.warn(`[Subscription] Rejecting suspicious node-count drop for ${sub.id || sub.url} (${knownNodeCount} known -> ${fetchedTotalCount} fetched)`);
                 if (cachedNodes.length > 0) return cachedNodes.join('\n');
                 // Do not write nodeCount=0 here: this response is suspicious,
                 // not evidence that the subscription has no usable nodes.
                 return '';
             }
-            if (cacheEnabled && realNodes.length === 0) {
+            if (cacheEnabled && fetchedTotalCount === 0 && disabledRemovedCount === 0) {
                 return (await readCachedNodes()).join('\n');
             }
             if (cacheEnabled) {
                 const cachedNodes = await readCachedNodes();
-                if (isSuspiciousNodeCountDrop(cachedNodes.length, realNodes.length)) {
-                    console.warn(`[SubscriptionCache] Refusing suspicious node-count drop for ${sub.id || sub.url} (${cachedNodes.length} -> ${realNodes.length})`);
+                if (isSuspiciousNodeCountDrop(cachedNodes.length, fetchedTotalCount)) {
+                    console.warn(`[SubscriptionCache] Refusing suspicious node-count drop for ${sub.id || sub.url} (${cachedNodes.length} -> ${fetchedTotalCount})`);
                     return cachedNodes.join('\n');
                 }
             }
