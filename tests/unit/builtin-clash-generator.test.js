@@ -14,6 +14,24 @@ describe('Clash 内置生成器', () => {
         const result = generateProxiesOnly(nodeWithControl);
         expect(result).toContain('TestSS');
     });
+
+    it('应使用安全 DNS 默认值并过滤本机伪节点', () => {
+        const result = generateBuiltinClashConfig([
+            'trojan://fake@127.0.0.1:443#伪节点',
+            'trojan://real@example.com:443#真实节点'
+        ].join('\n'));
+        const parsed = yaml.load(result);
+
+        expect(parsed.proxies.map(proxy => proxy.server)).toEqual(['example.com']);
+        expect(parsed['allow-lan']).toBe(false);
+        expect(parsed['bind-address']).toBe('127.0.0.1');
+        expect(parsed['external-controller']).toBe('127.0.0.1:9090');
+        expect(parsed.dns.ipv6).toBe(false);
+        expect(parsed.dns['enhanced-mode']).toBe('fake-ip');
+        expect(parsed.dns['respect-rules']).toBe(true);
+        expect(parsed.dns.nameserver).toContain('udp://8.8.8.8:53#🌐 DNS 出口');
+        expect(parsed.dns['nameserver-policy']['geosite:cn']).toEqual(['223.5.5.5', '119.29.29.29']);
+    });
     it('should render SS v2ray-plugin mux as a boolean for Clash compatibility', () => {
         const node = 'ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206TldSak1UVmxNVFZtTWpnMU5HRTVaRGsxT1dJd1pUUm1ZbVJrTnpkaU5qTT0@cf.090227.xyz:8080?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3Dss.2227tsj.workers.dev%3Bpath%3D%2F%3Fenc%5C%3D2022-blake3-aes-256-gcm%3Bmux%3D0#2022-blake3-aes-256-gcm';
         const result = generateProxiesOnly(node);
@@ -33,10 +51,7 @@ describe('Clash 内置生成器', () => {
         const parsed = yaml.load(result);
 
         expect(parsed.proxies[0].type).toBe('wireguard');
-        expect(parsed.proxies[0].ip).toBe('172.16.0.2');
-        expect(parsed.proxies[0]).not.toHaveProperty('ipv6');
-        // 上游已停用 remote-dns-resolve 注入，由内核自行决定
-        expect(parsed.proxies[0]).not.toHaveProperty('remote-dns-resolve');
+        expect(parsed.proxies[0]['remote-dns-resolve']).toBe(true);
     });
 
     it('不应在 Clash 输出中泄露内部 metadata 字段', () => {
@@ -91,5 +106,17 @@ describe('Clash 内置生成器', () => {
         expect(usGroup.proxies).toContain('🇸🇬 机场A 新加坡 原生');
         expect(usGroup.proxies).toContain('🇺🇸 机场A US-West');
         expect(sgGroup).toBeUndefined();
+    });
+
+    it('应为主要 AI 服务生成独立的代理组且不允许 DIRECT', () => {
+        const parsed = yaml.load(generateBuiltinClashConfig('trojan://password@example.com:443#US-01'));
+
+        for (const name of ['🤖 智能 AI', '🤖 OpenAI', '🤖 Claude', '🤖 Gemini', '🤖 Grok', '🤖 Perplexity', '🤖 Mistral']) {
+            const group = parsed['proxy-groups'].find(item => item.name === name);
+            expect(group, `${name} should exist`).toBeTruthy();
+            expect(group.proxies).not.toContain('DIRECT');
+        }
+        expect(parsed.rules).toContain('DOMAIN-SUFFIX,claude.ai,🤖 Claude');
+        expect(parsed.rules).toContain('DOMAIN-SUFFIX,grok.com,🤖 Grok');
     });
 });
