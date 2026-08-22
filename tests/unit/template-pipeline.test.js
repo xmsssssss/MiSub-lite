@@ -226,7 +226,8 @@ MATCH,节点选择
         expect(loonRendered).toContain('grpc-service-name=edge');
         expect(loonRendered).toContain('reality=true');
         expect(loonRendered).toContain('WG-01 = wireguard');
-        expect(loonRendered).toContain('RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/OpenAi.list,🤖 AI 服务');
+        expect(loonRendered).toContain('[Remote Rule]');
+        expect(loonRendered).toContain('https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/OpenAi.list, policy=🤖 AI 服务, enabled=true');
         expect(loonRendered).toContain('🚀 节点选择 = select');
         expect(quanxRendered).toContain('[server_local]');
         expect(quanxRendered).toContain('[policy]');

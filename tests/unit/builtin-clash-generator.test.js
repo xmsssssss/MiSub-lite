@@ -33,7 +33,10 @@ describe('Clash 内置生成器', () => {
         const parsed = yaml.load(result);
 
         expect(parsed.proxies[0].type).toBe('wireguard');
-        expect(parsed.proxies[0]['remote-dns-resolve']).toBe(true);
+        expect(parsed.proxies[0].ip).toBe('172.16.0.2');
+        expect(parsed.proxies[0]).not.toHaveProperty('ipv6');
+        // 上游已停用 remote-dns-resolve 注入，由内核自行决定
+        expect(parsed.proxies[0]).not.toHaveProperty('remote-dns-resolve');
     });
 
     it('不应在 Clash 输出中泄露内部 metadata 字段', () => {

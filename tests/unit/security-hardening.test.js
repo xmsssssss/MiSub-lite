@@ -263,7 +263,8 @@ describe('security hardening', () => {
       expect(queryResponse.status).not.toBe(401);
       expect(bearerResponse.status).not.toBe(401);
       expect(wrongQueryResponse.status).toBe(401);
-      expect(warnSpy).toHaveBeenCalledWith('[Storage] No KV binding found, using noop adapter');
+      // MiSub-lite：MISUB_DB 存在时存储解析静默直连 SQLite，不再输出 KV 回退警告
+      expect(warnSpy).not.toHaveBeenCalled();
       expect(infoSpy).toHaveBeenCalledWith('[Cron] Starting parallel update for 0 subscriptions');
     } finally {
       warnSpy.mockRestore();

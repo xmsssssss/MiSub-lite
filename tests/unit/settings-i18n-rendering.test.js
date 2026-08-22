@@ -190,8 +190,10 @@ describe('settings page English translations', () => {
       ...englishMountOptions()
     });
 
-    expect(wrapper.text()).toContain('Data storage type');
-    expect(wrapper.text()).toContain('D1 database (recommended)');
+    // MiSub-lite：存储区改为固定 SQLite 说明卡片（不再提供 KV/D1 选择）
+    expect(wrapper.text()).toContain('Data storage');
+    expect(wrapper.text()).toContain('MiSub-lite stores data in a local SQLite file');
+    expect(wrapper.text()).toContain('SQLite (local)');
     expect(wrapper.text()).toContain('External management API');
     expect(wrapper.text()).toContain('Bearer token');
     expect(wrapper.text()).toContain('Generate random token');
