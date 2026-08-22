@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { useVirtualScroll } from '@/composables/useVirtualScroll.js';
+import { useI18n } from '@/i18n/index.js';
 
 const props = defineProps({
   nodes: {
@@ -27,10 +28,38 @@ const props = defineProps({
   selectedUrls: {
     type: Set,
     default: () => new Set()
+  },
+  testResults: {
+    type: Object,
+    default: () => ({})
   }
 });
 
-const emit = defineEmits(['copy', 'toggle-select']);
+const emit = defineEmits(['copy', 'toggle-select', 'test-node']);
+
+const { t } = useI18n();
+
+const getTestState = (url) => props.testResults?.[url] || null;
+
+const isNodeTesting = (url) => getTestState(url)?.state === 'testing';
+
+const latencyClass = (state) => {
+  if (!state) return '';
+  if (state.state === 'ok') {
+    if (state.latency < 200) return 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400';
+    if (state.latency < 600) return 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400';
+    return 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400';
+  }
+  return 'bg-red-50 text-red-500 dark:bg-red-500/10 dark:text-red-400';
+};
+
+const latencyText = (state) => {
+  if (!state) return '';
+  if (state.state === 'ok') return t('nodePreview.latencyUnit', { ms: state.latency });
+  if (state.unsupported || state.error === 'udp_protocol') return t('nodePreview.unsupportedShort');
+  if (state.error === 'timeout') return t('nodePreview.timeoutShort');
+  return t('nodePreview.unreachableShort');
+};
 
 const nodesRef = computed(() => props.nodes);
 const containerHeight = 500;
@@ -58,13 +87,13 @@ const handleRowClick = (node) => {
           <!-- 表头 -->
           <div class="sticky top-0 z-10 border-b border-gray-100 bg-gray-50/50 backdrop-blur-md dark:border-white/5 dark:bg-gray-800/80">
             <div class="grid min-h-[3.5rem] grid-cols-12 gap-2 px-6 py-3 items-center text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">
-              <div v-if="selectionMode" class="col-span-1 flex justify-center text-indigo-500">Pick</div>
-              <div :class="selectionMode ? 'col-span-3' : 'col-span-4'">Node Name</div>
-              <div class="col-span-3 hidden sm:block">Server Address</div>
-              <div class="col-span-2 hidden md:block text-center">Port</div>
-              <div class="col-span-1 hidden sm:block text-center">Type</div>
-              <div class="col-span-1 hidden sm:block text-center">Region</div>
-              <div class="col-span-1 text-center">Action</div>
+              <div v-if="selectionMode" class="col-span-1 flex justify-center text-indigo-500">{{ t('nodePreview.colPick') }}</div>
+              <div :class="selectionMode ? 'col-span-2' : 'col-span-3'">{{ t('nodePreview.colName') }}</div>
+              <div class="col-span-3 hidden sm:block">{{ t('nodePreview.colServer') }}</div>
+              <div class="col-span-2 hidden md:block text-center">{{ t('nodePreview.colPort') }}</div>
+              <div class="col-span-1 hidden sm:block text-center">{{ t('nodePreview.colType') }}</div>
+              <div class="col-span-1 hidden sm:block text-center">{{ t('nodePreview.colRegion') }}</div>
+              <div class="col-span-2 text-center">{{ t('nodePreview.colAction') }}</div>
             </div>
           </div>
 
@@ -90,7 +119,7 @@ const handleRowClick = (node) => {
                   </div>
 
                   <!-- 节点名称 -->
-                  <div :class="selectionMode ? 'col-span-3' : 'col-span-4'">
+                  <div :class="selectionMode ? 'col-span-2' : 'col-span-3'">
                     <span class="text-sm font-bold text-gray-900 dark:text-white block overflow-hidden group-hover:text-indigo-600 transition-colors" :title="parseNodeInfo(node).name" style="text-overflow: ellipsis; white-space: nowrap;">
                       {{ parseNodeInfo(node).name }}
                     </span>
@@ -129,7 +158,30 @@ const handleRowClick = (node) => {
                   </div>
 
                   <!-- 操作 (所有设备) -->
-                  <div class="col-span-1 flex justify-center">
+                  <div class="col-span-2 flex items-center justify-center gap-1.5">
+                    <span
+                      v-if="getTestState(node.url) && !isNodeTesting(node.url)"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold tabular-nums"
+                      :class="latencyClass(getTestState(node.url))"
+                      :title="getTestState(node.url).error || ''"
+                    >
+                      {{ latencyText(getTestState(node.url)) }}
+                    </span>
+                    <button
+                      v-if="!selectionMode"
+                      @click.stop="emit('test-node', node)"
+                      :disabled="isNodeTesting(node.url)"
+                      class="inline-flex items-center justify-center w-8 h-8 rounded text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-all duration-150 disabled:opacity-60"
+                      :title="t('nodePreview.retestNode')"
+                    >
+                      <svg v-if="isNodeTesting(node.url)" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    </button>
                     <button
                       v-if="!selectionMode"
                       @click.stop="emit('copy', node, node.url)"
@@ -151,7 +203,7 @@ const handleRowClick = (node) => {
 
           <!-- 空状态 -->
           <div v-if="nodes.length === 0" class="py-12 text-center text-gray-500 dark:text-gray-400">
-            暂无节点数据
+            {{ t('nodePreview.noNodesData') }}
           </div>
         </div>
       </div>

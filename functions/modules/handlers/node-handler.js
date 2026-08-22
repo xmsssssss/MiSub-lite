@@ -7,6 +7,7 @@ import { StorageFactory } from '../../storage-adapter.js';
 import { DEFAULT_SETTINGS, KV_KEY_SETTINGS } from '../config.js';
 import { createJsonResponse, createErrorResponse, JSON_BODY_LIMITS, readJsonWithLimit } from '../utils.js';
 import { parseNodeList } from '../utils/node-parser.js';
+import { parseNodeInfo } from '../utils/geo-utils.js';
 import { getProcessedUserAgent } from '../../utils/format-utils.js';
 import { buildFetchProxyUrl } from '../../utils/fetch-proxy-utils.js';
 import { isSuspiciousNodeCountDrop } from '../../services/node-cache-service.js';
@@ -678,5 +679,165 @@ export async function handleHealthCheckRequest(request, env) {
         return createJsonResponse({
             error: `健康检查失败: ${e.message}`
         }, 500);
+    }
+}
+
+// --- 节点延迟测试（本地 Node.js 环境：TCP 握手连通性测速） ---
+
+const LATENCY_TEST_MAX_URLS = 100;
+const LATENCY_TEST_CONCURRENCY = 8;
+const LATENCY_TEST_DEFAULT_TIMEOUT = 4000;
+
+// 基于 QUIC(UDP) 的协议无法用 TCP 握手测速，单独标记
+const UDP_QUIC_PROTOCOLS = new Set(['hysteria', 'hysteria2', 'hy2', 'tuic']);
+
+function normalizeTestPort(port) {
+    const n = parseInt(String(port), 10);
+    return Number.isFinite(n) && n > 0 && n < 65536 ? n : 0;
+}
+
+/**
+ * 对单个 host:port 做 TCP 连接测速
+ * @returns {Promise<{ok: boolean, latency?: number, error?: string}>}
+ */
+async function tcpConnectProbe(host, port, timeoutMs) {
+    let net;
+    try {
+        net = await import('node:net');
+    } catch (e) {
+        return { ok: false, error: 'runtime_unsupported' };
+    }
+
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        let settled = false;
+        const socket = new net.Socket();
+
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { socket.destroy(); } catch (_) { /* ignore */ }
+            resolve(result);
+        };
+
+        const timer = setTimeout(() => finish({ ok: false, error: 'timeout' }), timeoutMs);
+
+        socket.once('connect', () => {
+            socket.setTimeout(0);
+            finish({ ok: true, latency: Date.now() - startedAt });
+        });
+        socket.once('timeout', () => finish({ ok: false, error: 'timeout' }));
+        socket.once('error', (err) => finish({ ok: false, error: err?.code || err?.message || 'error' }));
+
+        try {
+            socket.connect(port, host);
+        } catch (err) {
+            finish({ ok: false, error: err?.code || err?.message || 'error' });
+        }
+    });
+}
+
+async function runLatencyTestTarget(target, timeoutMs) {
+    const base = {
+        nodeUrl: target.nodeUrl,
+        protocol: target.protocol,
+        server: target.host,
+        port: target.port,
+        checkTime: new Date().toISOString()
+    };
+
+    if (!target.host || !target.port) {
+        return { ...base, ok: false, latency: null, error: 'invalid_address' };
+    }
+    if (UDP_QUIC_PROTOCOLS.has(target.protocol)) {
+        return { ...base, ok: false, latency: null, unsupported: true, error: 'udp_protocol' };
+    }
+
+    const probe = await tcpConnectProbe(target.host, target.port, timeoutMs);
+    return {
+        ...base,
+        ok: probe.ok,
+        latency: probe.ok ? probe.latency : null,
+        error: probe.ok ? null : (probe.error || 'unreachable')
+    };
+}
+
+/**
+ * 节点延迟测试（TCP 连通性）
+ * POST /api/nodes/test  body: { nodeUrls: string[], timeout?: number }
+ */
+export async function handleNodeLatencyTestRequest(request, env) {
+    if (request.method !== 'POST') {
+        return createJsonResponse({ error: 'Method Not Allowed' }, 405);
+    }
+
+    try {
+        // 仅本地 Node.js 运行时支持真实 TCP 测速
+        let netAvailable = false;
+        try {
+            const net = await import('node:net');
+            netAvailable = typeof net?.Socket === 'function';
+        } catch (_) { netAvailable = false; }
+        if (!netAvailable) {
+            return createJsonResponse({
+                success: false,
+                error: '当前运行环境不支持 TCP 测速（需要本地 Node.js 运行）'
+            }, 400);
+        }
+
+        const requestData = await readJsonWithLimit(request, JSON_BODY_LIMITS.normal);
+        const rawUrls = Array.isArray(requestData?.nodeUrls) ? requestData.nodeUrls : [];
+        let timeout = parseInt(requestData?.timeout, 10);
+        if (!Number.isFinite(timeout) || timeout <= 0) timeout = LATENCY_TEST_DEFAULT_TIMEOUT;
+        timeout = Math.min(Math.max(timeout, 500), 10000);
+
+        const uniqueUrls = [...new Set(rawUrls.filter(u => typeof u === 'string' && u.trim()))]
+            .slice(0, LATENCY_TEST_MAX_URLS);
+
+        if (uniqueUrls.length === 0) {
+            return createJsonResponse({ error: '请提供要测试的节点URL列表' }, 400);
+        }
+
+        const targets = uniqueUrls.map(nodeUrl => {
+            let info = {};
+            try {
+                info = parseNodeInfo(nodeUrl) || {};
+            } catch (_) { info = {}; }
+            return {
+                nodeUrl,
+                protocol: String(info.protocol || '').toLowerCase(),
+                host: String(info.server || '').trim(),
+                port: normalizeTestPort(info.port)
+            };
+        });
+
+        const results = new Array(targets.length);
+        let cursor = 0;
+
+        const worker = async () => {
+            while (cursor < targets.length) {
+                const index = cursor++;
+                results[index] = await runLatencyTestTarget(targets[index], timeout);
+            }
+        };
+        await Promise.all(
+            Array.from({ length: Math.min(LATENCY_TEST_CONCURRENCY, targets.length) }, () => worker())
+        );
+
+        const okCount = results.filter(r => r.ok).length;
+
+        return createJsonResponse({
+            success: true,
+            results,
+            summary: {
+                total: results.length,
+                ok: okCount,
+                failed: results.length - okCount,
+                timeout
+            }
+        });
+    } catch (e) {
+        return createJsonResponse({ error: `节点测速失败: ${e.message}` }, 500);
     }
 }

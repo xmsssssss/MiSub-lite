@@ -35,7 +35,8 @@ import {
     handleNodeCountRequest as handleLegacyNodeCountRequest,
     handleBatchUpdateNodesRequest,
     handleCleanNodesRequest,
-    handleHealthCheckRequest
+    handleHealthCheckRequest,
+    handleNodeLatencyTestRequest
 } from './handlers/node-handler.js';
 import { handleClientRequest } from './handlers/client-handler.js';
 import { handleErrorReportRequest } from './handlers/error-report-handler.js';
@@ -400,6 +401,9 @@ export async function handleApiRequest(request, env, context = null) {
 
         case '/nodes/health':
             return await handleHealthCheckRequest(request, env);
+
+        case '/nodes/test':
+            return await handleNodeLatencyTestRequest(request, env);
 
         case '/nodes/clean':
             return await handleCleanNodesRequest(request, env);

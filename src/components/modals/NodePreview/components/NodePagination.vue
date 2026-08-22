@@ -1,5 +1,8 @@
 <script setup>
 import { computed } from 'vue';
+import { useI18n } from '@/i18n/index.js';
+
+const { t } = useI18n();
 
 const props = defineProps({
   currentPage: {
@@ -69,7 +72,7 @@ const goToPage = (page) => {
     <!-- 桌面端完整分页 -->
     <div v-if="currentPage > 0" class="hidden sm:flex items-center justify-between">
       <div class="text-sm text-gray-700 dark:text-gray-300">
-        显示第 {{ ((currentPage - 1) * pageSize) + 1 }} - {{ Math.min(currentPage * pageSize, totalItems) }} 项，共 {{ totalItems }} 项
+        {{ t('nodePreview.paginationInfo', { start: ((currentPage - 1) * pageSize) + 1, end: Math.min(currentPage * pageSize, totalItems), total: totalItems }) }}
       </div>
       <div class="flex items-center space-x-2">
         <!-- 上一页 -->
@@ -78,7 +81,7 @@ const goToPage = (page) => {
           :disabled="currentPage <= 1"
           class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         >
-          上一页
+          {{ t('nodePreview.prevPage') }}
         </button>
 
         <!-- 页码 -->
@@ -105,7 +108,7 @@ const goToPage = (page) => {
           :disabled="currentPage >= totalPages"
           class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         >
-          下一页
+          {{ t('nodePreview.nextPage') }}
         </button>
       </div>
     </div>
@@ -114,10 +117,10 @@ const goToPage = (page) => {
     <div class="sm:hidden">
       <div class="mb-3 flex items-center justify-between">
         <div class="text-sm text-gray-700 dark:text-gray-300">
-          {{ currentPage }} / {{ totalPages }} 页
+          {{ t('nodePreview.mobilePageInfo', { current: currentPage, total: totalPages }) }}
         </div>
         <div class="text-sm text-gray-500 dark:text-gray-400">
-          共 {{ totalItems }} 项
+          {{ t('nodePreview.mobileTotalInfo', { total: totalItems }) }}
         </div>
       </div>
       <div class="flex items-center justify-center space-x-4">
@@ -126,7 +129,7 @@ const goToPage = (page) => {
           :disabled="currentPage <= 1"
           class="max-w-[100px] flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         >
-          上一页
+          {{ t('nodePreview.prevPage') }}
         </button>
         <span class="px-3 py-1 text-sm font-medium text-gray-600 dark:text-gray-400">
           {{ currentPage }}
@@ -136,7 +139,7 @@ const goToPage = (page) => {
           :disabled="currentPage >= totalPages"
           class="max-w-[100px] flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         >
-          下一页
+          {{ t('nodePreview.nextPage') }}
         </button>
       </div>
     </div>

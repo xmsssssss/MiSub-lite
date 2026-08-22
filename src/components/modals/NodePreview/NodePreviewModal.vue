@@ -72,6 +72,98 @@ const copiedNodeId = ref('');
 const pickingMode = ref(false);
 const selectedUrls = ref(new Set());
 
+// 延迟测试状态: url -> { state: 'testing'|'ok'|'fail', latency, error }
+const testResults = ref({});
+const batchTesting = ref(false);
+const batchCancelFlag = ref(false);
+const batchProgress = ref({ done: 0, total: 0 });
+const TEST_BATCH_SIZE = 8;
+const TEST_NODE_TIMEOUT = 4000;
+
+const applyTestResult = (url, result) => {
+  const next = { ...testResults.value };
+  next[url] = result;
+  testResults.value = next;
+};
+
+const markBatchResults = (urls, state) => {
+  const next = { ...testResults.value };
+  urls.forEach(url => { next[url] = { state }; });
+  testResults.value = next;
+};
+
+const requestNodeTests = async (urls) => {
+  try {
+    const data = await api.post('/api/nodes/test', {
+      nodeUrls: urls,
+      timeout: TEST_NODE_TIMEOUT
+    });
+    if (!data.success) throw new Error(data.error || 'test failed');
+    return data.results || [];
+  } catch (err) {
+    showToast(t('nodePreview.testRequestFailed', { message: err.message }), 'error');
+    return urls.map(nodeUrl => ({ nodeUrl, ok: false, latency: null, error: 'request_failed' }));
+  }
+};
+
+// 单节点测速（Action 按钮触发）
+const testSingleNode = async (node) => {
+  if (!node?.url || batchTesting.value) return;
+  if (testResults.value[node.url]?.state === 'testing') return;
+  applyTestResult(node.url, { state: 'testing' });
+  const results = await requestNodeTests([node.url]);
+  const r = results.find(item => item.nodeUrl === node.url);
+  if (!r) {
+    applyTestResult(node.url, { state: 'fail', error: 'no_result' });
+    return;
+  }
+  applyTestResult(node.url, r.ok
+    ? { state: 'ok', latency: r.latency }
+    : { state: 'fail', error: r.error || '', unsupported: !!r.unsupported });
+};
+
+// 批量测速当前筛选出的节点
+const testAllNodes = async () => {
+  if (batchTesting.value || loading.value) return;
+  const targets = filteredNodes.value.map(n => n.url).filter(Boolean);
+  if (targets.length === 0) return;
+
+  batchTesting.value = true;
+  batchCancelFlag.value = false;
+  batchProgress.value = { done: 0, total: targets.length };
+
+  let okCount = 0;
+  try {
+    for (let i = 0; i < targets.length; i += TEST_BATCH_SIZE) {
+      if (batchCancelFlag.value) break;
+      const chunk = targets.slice(i, i + TEST_BATCH_SIZE);
+      markBatchResults(chunk, 'testing');
+      const results = await requestNodeTests(chunk);
+      const resultMap = new Map(results.map(r => [r.nodeUrl, r]));
+      chunk.forEach(url => {
+        const r = resultMap.get(url);
+        if (r?.ok) okCount += 1;
+        applyTestResult(url, r
+          ? (r.ok
+            ? { state: 'ok', latency: r.latency }
+            : { state: 'fail', error: r.error || '', unsupported: !!r.unsupported })
+          : { state: 'fail', error: 'no_result' });
+      });
+      batchProgress.value = { ...batchProgress.value, done: Math.min(i + TEST_BATCH_SIZE, targets.length) };
+    }
+    if (!batchCancelFlag.value) {
+      showToast(t('nodePreview.testDoneSummary', { ok: okCount, total: targets.length }), 'success');
+    }
+  } finally {
+    batchTesting.value = false;
+    batchCancelFlag.value = false;
+  }
+};
+
+const cancelBatchTest = () => {
+  batchCancelFlag.value = true;
+};
+
 const toggleNodeSelection = (url) => {
   if (selectedUrls.value.has(url)) {
     selectedUrls.value.delete(url);
@@ -115,14 +207,14 @@ const handleSaveSelection = async () => {
     });
 
     addNodesFromBulk(nodesToAdd);
-    
+
     // Add nodes to the manual list. Profile association remains an explicit follow-up action.
-    showToast(`已成功提取 ${urls.length} 个节点至手动列表，请记得保存更改。`, 'success');
-    
+    showToast(t('nodePreview.extractSuccess', { count: urls.length }), 'success');
+
     pickingMode.value = false;
     selectedUrls.value.clear();
   } catch (err) {
-    showToast('保存选择失败: ' + err.message, 'error');
+    showToast(t('nodePreview.saveSelectionFailed', { message: err.message }), 'error');
   }
 };
 
@@ -131,7 +223,7 @@ const title = computed(() => {
   if (props.profileName) {
     return props.profileName;
   }
-  return props.subscriptionName || '未知订阅';
+  return props.subscriptionName || t('nodePreview.unknownSubscription');
 });
 
 const subtitle = computed(() => {
@@ -198,6 +290,9 @@ const resetState = () => {
   copiedNodeId.value = '';
   pickingMode.value = false;
   selectedUrls.value.clear();
+  testResults.value = {};
+  batchTesting.value = false;
+  batchCancelFlag.value = true; // 中断可能仍在进行的批量测速
 };
 
 const closeModal = () => {
@@ -255,7 +350,7 @@ const loadNodes = async () => {
     } else if (props.subscriptionUrl) {
       requestData.url = props.subscriptionUrl;
     } else {
-      throw new Error('缺少必要的参数');
+      throw new Error(t('nodePreview.missingParams'));
     }
 
     if (isDev) {
@@ -268,7 +363,7 @@ const loadNodes = async () => {
     }
 
     if (!data.success) {
-      throw new Error(data.error || '获取节点失败');
+      throw new Error(data.error || t('nodePreview.fetchFailed'));
     }
 
     allNodes.value = data.nodes || [];
@@ -306,14 +401,14 @@ const loadNodes = async () => {
     if (err instanceof APIError && err.status === 401) {
       try {
         await api.get('/api/data');
-        error.value = '认证异常，请刷新页面后重试';
+        error.value = t('nodePreview.authAbnormal');
       } catch (testErr) {
-        error.value = '认证失败，请重新登录后再试';
+        error.value = t('nodePreview.authFailed');
       }
     } else if (err.message.includes('网络')) {
-      error.value = '网络连接失败，请检查网络连接';
+      error.value = t('nodePreview.networkFailed');
     } else {
-      error.value = err.message || '加载节点失败';
+      error.value = err.message || t('nodePreview.loadFailed');
     }
 
     allNodes.value = [];
@@ -481,6 +576,24 @@ const goToPage = (page) => {
         </div>
         <div class="flex items-center gap-3 self-end sm:self-auto">
           <button
+            v-if="!loading && !error && allNodes.length > 0"
+            @click="batchTesting ? cancelBatchTest() : testAllNodes()"
+            :disabled="!batchTesting && loading"
+            class="px-4 py-2 text-xs font-bold rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2"
+            :class="batchTesting ? 'bg-amber-500 text-white shadow-amber-500/20' : 'bg-emerald-600 text-white shadow-emerald-500/20 hover:bg-emerald-500'"
+          >
+            <svg v-if="batchTesting" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+            </svg>
+            {{ batchTesting
+              ? `${t('nodePreview.cancelTest')} (${batchProgress.done}/${batchProgress.total})`
+              : t('nodePreview.testLatency') }}
+          </button>
+          <button
             v-if="profileId"
             @click="pickingMode = !pickingMode"
             class="px-4 py-2 text-xs font-bold rounded-xl transition-all shadow-sm active:scale-95"
@@ -512,7 +625,7 @@ const goToPage = (page) => {
                  <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
                </div>
                <div>
-                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">Nodes Total</div>
+                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">{{ t('nodePreview.nodesTotal') }}</div>
                  <div class="text-2xl font-black text-gray-900 dark:text-white">{{ allNodes.length }}</div>
                </div>
              </div>
@@ -525,7 +638,7 @@ const goToPage = (page) => {
                  <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                </div>
                <div>
-                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">Protocols</div>
+                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">{{ t('nodePreview.protocolTypes') }}</div>
                  <div class="text-2xl font-black text-gray-900 dark:text-white">{{ Object.keys(protocolStats).length }}</div>
                </div>
              </div>
@@ -538,7 +651,7 @@ const goToPage = (page) => {
                  <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                </div>
                <div>
-                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">Regions</div>
+                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">{{ t('nodePreview.regionsCount') }}</div>
                  <div class="text-2xl font-black text-gray-900 dark:text-white">{{ Object.keys(regionStats).length }}</div>
                </div>
              </div>
@@ -551,7 +664,7 @@ const goToPage = (page) => {
                  <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
                </div>
                <div>
-                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">Total Pages</div>
+                 <div class="text-xs font-bold text-gray-400 uppercase tracking-tighter dark:text-gray-500">{{ t('nodePreview.totalPagesCount') }}</div>
                  <div class="text-2xl font-black text-gray-900 dark:text-white">{{ totalPages }}</div>
                </div>
              </div>
@@ -640,8 +753,10 @@ const goToPage = (page) => {
               :get-protocol-style="getProtocolStyle"
               :selection-mode="pickingMode"
               :selected-urls="selectedUrls"
+              :test-results="testResults"
               @copy="copyNodeUrl"
               @toggle-select="toggleNodeSelection"
+              @test-node="testSingleNode"
             />
 
             <!-- 卡片视图 container -->
@@ -653,8 +768,10 @@ const goToPage = (page) => {
               :get-protocol-style="getProtocolStyle"
               :selection-mode="pickingMode"
               :selected-urls="selectedUrls"
+              :test-results="testResults"
               @copy="copyNodeUrl"
               @toggle-select="toggleNodeSelection"
+              @test-node="testSingleNode"
             />
           </div>
         </div>

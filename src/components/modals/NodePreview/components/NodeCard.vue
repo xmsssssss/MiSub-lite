@@ -1,4 +1,6 @@
 <script setup>
+import { useI18n } from '@/i18n/index.js';
+
 const props = defineProps({
   nodes: {
     type: Array,
@@ -24,10 +26,38 @@ const props = defineProps({
   selectedUrls: {
     type: Set,
     default: () => new Set()
+  },
+  testResults: {
+    type: Object,
+    default: () => ({})
   }
 });
 
-const emit = defineEmits(['copy', 'toggle-select']);
+const emit = defineEmits(['copy', 'toggle-select', 'test-node']);
+
+const { t } = useI18n();
+
+const getTestState = (url) => props.testResults?.[url] || null;
+
+const isNodeTesting = (url) => getTestState(url)?.state === 'testing';
+
+const latencyClass = (state) => {
+  if (!state) return '';
+  if (state.state === 'ok') {
+    if (state.latency < 200) return 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400';
+    if (state.latency < 600) return 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400';
+    return 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400';
+  }
+  return 'bg-red-50 text-red-500 dark:bg-red-500/10 dark:text-red-400';
+};
+
+const latencyText = (state) => {
+  if (!state) return '';
+  if (state.state === 'ok') return t('nodePreview.latencyUnit', { ms: state.latency });
+  if (state.unsupported || state.error === 'udp_protocol') return t('nodePreview.unsupportedShort');
+  if (state.error === 'timeout') return t('nodePreview.timeoutShort');
+  return t('nodePreview.unreachableShort');
+};
 
 const handleCardClick = (node) => {
   if (props.selectionMode) {
@@ -66,7 +96,7 @@ const handleCardClick = (node) => {
             <h4 class="truncate text-sm font-black text-gray-900 dark:text-white mb-1">
               {{ parseNodeInfo(node).name }}
             </h4>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <span
                 class="text-[9px] px-1.5 py-0.5 rounded-full uppercase font-black"
                 :class="getProtocolStyle(parseNodeInfo(node).protocol)"
@@ -76,24 +106,46 @@ const handleCardClick = (node) => {
                <span class="truncate text-[10px] text-gray-400 dark:text-gray-500 font-mono tracking-tighter uppercase">
                  {{ parseNodeInfo(node).server.split('.').slice(-2).join('.') }} : {{ parseNodeInfo(node).port }}
                </span>
+              <span
+                v-if="getTestState(node.url) && !isNodeTesting(node.url)"
+                class="text-[9px] px-1.5 py-0.5 rounded-full font-bold tabular-nums"
+                :class="latencyClass(getTestState(node.url))"
+              >
+                {{ latencyText(getTestState(node.url)) }}
+              </span>
             </div>
           </div>
         </div>
- 
+
         <!-- 右侧：操作按钮 -->
-        <button
-          v-if="!selectionMode"
-          @click.stop="emit('copy', node, node.url)"
-          class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition-all active:bg-indigo-600 active:text-white dark:bg-white/5"
-          :class="{ 'text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10': copiedNodeId === node.url }"
-        >
-          <svg v-if="copiedNodeId !== node.url" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-          </svg>
-        </button>
+        <div v-if="!selectionMode" class="flex items-center gap-2 flex-shrink-0">
+          <button
+            @click.stop="emit('test-node', node)"
+            :disabled="isNodeTesting(node.url)"
+            class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition-all active:bg-emerald-600 active:text-white dark:bg-white/5 disabled:opacity-60"
+            :title="t('nodePreview.retestNode')"
+          >
+            <svg v-if="isNodeTesting(node.url)" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </button>
+          <button
+            @click.stop="emit('copy', node, node.url)"
+            class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition-all active:bg-indigo-600 active:text-white dark:bg-white/5"
+            :class="{ 'text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10': copiedNodeId === node.url }"
+          >
+            <svg v-if="copiedNodeId !== node.url" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -138,7 +190,15 @@ const handleCardClick = (node) => {
                 <span
                   class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-gray-50 text-gray-500 dark:bg-white/5 dark:text-gray-400"
                 >
-                  {{ parseNodeInfo(node).region || 'UNKNOWN' }}
+                  {{ parseNodeInfo(node).region || t('nodePreview.unknownRegion') }}
+                </span>
+                <span
+                  v-if="getTestState(node.url) && !isNodeTesting(node.url)"
+                  class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold tabular-nums"
+                  :class="latencyClass(getTestState(node.url))"
+                  :title="getTestState(node.url).error || ''"
+                >
+                  {{ latencyText(getTestState(node.url)) }}
                 </span>
               </div>
             </div>
@@ -148,26 +208,41 @@ const handleCardClick = (node) => {
           <div class="mt-auto pt-4 border-t border-gray-100 dark:border-gray-700/50">
             <div class="flex items-center justify-between">
               <div class="min-w-0">
-                <div class="text-[11px] text-gray-400 dark:text-gray-500 mb-0.5 font-medium uppercase tracking-tighter">Endpoint</div>
+                <div class="text-[11px] text-gray-400 dark:text-gray-500 mb-0.5 font-medium uppercase tracking-tighter">{{ t('nodePreview.endpointLabel') }}</div>
                 <div class="text-xs font-mono text-gray-600 dark:text-gray-300 truncate">
                   {{ parseNodeInfo(node).server }}:{{ parseNodeInfo(node).port }}
                 </div>
               </div>
-              
-              <!-- 复制按钮 (Floating when hovered, only in non-selection mode) -->
-              <button
-                v-if="!selectionMode"
-                @click.stop="emit('copy', node, node.url)"
-                class="opacity-0 group-hover:opacity-100 p-2 rounded-xl bg-gray-100 dark:bg-gray-700 hover:bg-indigo-600 hover:text-white transition-all transform scale-90 group-hover:scale-100"
-                :class="{ 'opacity-100 bg-green-500 text-white': copiedNodeId === node.url }"
-              >
-                <svg v-if="copiedNodeId !== node.url" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
-              </button>
+
+              <!-- 测速 + 复制按钮 (Floating when hovered, only in non-selection mode) -->
+              <div v-if="!selectionMode" class="flex items-center gap-1.5">
+                <button
+                  @click.stop="emit('test-node', node)"
+                  :disabled="isNodeTesting(node.url)"
+                  class="opacity-0 group-hover:opacity-100 p-2 rounded-xl bg-gray-100 dark:bg-gray-700 hover:bg-emerald-600 hover:text-white transition-all transform scale-90 group-hover:scale-100 disabled:opacity-60"
+                  :title="t('nodePreview.retestNode')"
+                >
+                  <svg v-if="isNodeTesting(node.url)" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </button>
+                <button
+                  @click.stop="emit('copy', node, node.url)"
+                  class="opacity-0 group-hover:opacity-100 p-2 rounded-xl bg-gray-100 dark:bg-gray-700 hover:bg-indigo-600 hover:text-white transition-all transform scale-90 group-hover:scale-100"
+                  :class="{ 'opacity-100 bg-green-500 text-white': copiedNodeId === node.url }"
+                >
+                  <svg v-if="copiedNodeId !== node.url" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>

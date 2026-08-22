@@ -74,13 +74,14 @@ describe('NodePreviewModal English translations', () => {
     expect(wrapper.text()).toContain('CMSS');
     expect(wrapper.text()).toContain('Profile node overview');
     expect(wrapper.text()).toContain('Pick nodes');
-    expect(wrapper.text()).toContain('Nodes Total');
-    expect(wrapper.text()).toContain('Protocols');
+    expect(wrapper.text()).toContain('Nodes total');
+    expect(wrapper.text()).toContain('Protocol types');
     expect(wrapper.text()).toContain('Regions');
-    expect(wrapper.text()).toContain('Total Pages');
+    expect(wrapper.text()).toContain('Total pages');
     expectNoChineseOrKeys(wrapper.text());
 
-    await wrapper.find('button').trigger('click');
+    expect(wrapper.text()).toContain('Test latency');
+    await wrapper.findAll('button').find(button => button.text().includes('Pick nodes')).trigger('click');
 
     expect(wrapper.text()).toContain('Exit picking');
     expect(wrapper.text()).toContain('Picking mode');
