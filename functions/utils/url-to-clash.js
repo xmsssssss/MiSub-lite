@@ -1250,20 +1250,18 @@ function parseHttpsUrl(url) {
 }
 
 /**
- * 将 SOCKS5 URL 转换为 Clash 代理对象
- * @param {string} url - SOCKS5 URL
+ * 将 HTTP 代理 URL 转换为 Clash 代理对象
+ * @param {string} url - HTTP URL
  * @returns {Object|null} Clash 代理对象
  */
-function parseSocks5Url(url) {
+function parseHttpUrl(url) {
     try {
-        // socks5://username:password@server:port?tls=1#name
-        const body = url.substring(9);
-        const atIndex = body.indexOf('@');
-        if (atIndex === -1) return null;
+        // http://[username:password@]server:port?params#name
+        const body = url.substring(7);
+        const name = extractName(url);
+        const params = parseQueryParams(url);
 
-        let userInfo = body.substring(0, atIndex);
-        let serverPart = body.substring(atIndex + 1);
-
+        let serverPart = body;
         const queryIndex = serverPart.indexOf('?');
         const hashIndex = serverPart.indexOf('#');
         if (queryIndex !== -1) {
@@ -1272,18 +1270,92 @@ function parseSocks5Url(url) {
             serverPart = serverPart.substring(0, hashIndex);
         }
 
+        let userInfo = '';
+        const atIndex = serverPart.lastIndexOf('@');
+        if (atIndex !== -1) {
+            userInfo = serverPart.substring(0, atIndex);
+            serverPart = serverPart.substring(atIndex + 1);
+        }
+
         const { server, port } = parseHostPort(serverPart);
-        const params = parseQueryParams(url);
+
+        const proxy = {
+            name: name || `HTTP-${server}`,
+            type: 'http',
+            server,
+            port
+        };
+
+        if (userInfo) {
+            const colonIndex = userInfo.indexOf(':');
+            if (colonIndex !== -1) {
+                proxy.username = decodeURIComponent(userInfo.substring(0, colonIndex));
+                proxy.password = decodeURIComponent(userInfo.substring(colonIndex + 1));
+            } else {
+                proxy.username = decodeURIComponent(userInfo);
+            }
+        }
+
+        if (params.get('sni')) {
+            proxy.servername = params.get('sni');
+            proxy.sni = params.get('sni');
+        }
+
+        if (params.get('tls') === '1' || params.get('tls') === 'true') {
+            proxy.tls = true;
+        }
+
+        if (params.get('allowInsecure') === '1' || params.get('insecure') === '1') {
+            proxy['skip-cert-verify'] = true;
+        }
+
+        return proxy;
+    } catch (e) {
+        console.error('解析 HTTP URL 失败:', e);
+        return null;
+    }
+}
+
+/**
+ * 将 SOCKS5 URL 转换为 Clash 代理对象
+ * @param {string} url - SOCKS5 URL
+ * @returns {Object|null} Clash 代理对象
+ */
+function parseSocks5Url(url) {
+    try {
+        // socks5://[username:password@]server:port?tls=1#name
+        const body = url.substring(9);
         const name = extractName(url);
+        const params = parseQueryParams(url);
+
+        let serverPart = body;
+        const queryIndex = serverPart.indexOf('?');
+        const hashIndex = serverPart.indexOf('#');
+        if (queryIndex !== -1) {
+            serverPart = serverPart.substring(0, queryIndex);
+        } else if (hashIndex !== -1) {
+            serverPart = serverPart.substring(0, hashIndex);
+        }
+
+        let userInfo = '';
+        const atIndex = serverPart.lastIndexOf('@');
+        if (atIndex !== -1) {
+            userInfo = serverPart.substring(0, atIndex);
+            serverPart = serverPart.substring(atIndex + 1);
+        }
+
+        const { server, port } = parseHostPort(serverPart);
 
         let username = '';
         let password = '';
-        const colonIndex = userInfo.indexOf(':');
-        if (colonIndex !== -1) {
-            username = decodeURIComponent(userInfo.substring(0, colonIndex));
-            password = decodeURIComponent(userInfo.substring(colonIndex + 1));
-        } else {
-            username = decodeURIComponent(userInfo);
+        if (userInfo) {
+            const colonIndex = userInfo.indexOf(':');
+            if (colonIndex !== -1) {
+                username = decodeURIComponent(userInfo.substring(0, colonIndex));
+                password = decodeURIComponent(userInfo.substring(colonIndex + 1));
+            } else {
+                username = decodeURIComponent(userInfo);
+            }
         }
 
         const useTls = params.get('tls') === '1' || params.get('tls') === 'true' || params.get('secure') === '1';
@@ -1292,17 +1364,15 @@ function parseSocks5Url(url) {
             type: useTls ? 'socks5-tls' : 'socks5',
             server,
             port,
-            username,
-            password,
             udp: false
         };
+
+        if (username) proxy.username = username;
+        if (password) proxy.password = password;
 
         if (params.get('sni')) {
             proxy.servername = params.get('sni');
             proxy.sni = params.get('sni');
-        } else if (params.get('peer')) {
-            proxy.servername = params.get('peer');
-            proxy.sni = params.get('peer');
         }
 
         if (params.get('allowInsecure') === '1' || params.get('insecure') === '1') {
@@ -1441,6 +1511,8 @@ export function urlToClashProxy(url) {
         return parseAnytlsUrl(url);
     } else if (lowerUrl.startsWith('https://')) {
         return parseHttpsUrl(url);
+    } else if (lowerUrl.startsWith('http://')) {
+        return parseHttpUrl(url);
     } else if (lowerUrl.startsWith('socks5://')) {
         return parseSocks5Url(url);
     }

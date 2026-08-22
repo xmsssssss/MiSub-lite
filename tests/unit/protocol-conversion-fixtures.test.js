@@ -637,18 +637,6 @@ proxies:
             },
             {
                 proxy: {
-                    name: 'Fixture HTTP Export',
-                    type: 'http',
-                    server: 'http.example.com',
-                    port: 8080,
-                    username: 'user',
-                    password: 'p@ss:word'
-                },
-                urlPattern: /^http:\/\/user:p%40ss%3Aword@http\.example\.com:8080#Fixture%20HTTP%20Export$/,
-                requiredParts: []
-            },
-            {
-                proxy: {
                     name: 'Fixture Naive Export',
                     type: 'naive',
                     server: 'naive.example.com',
@@ -676,5 +664,20 @@ proxies:
             expect(urlToClashProxy(url)).toBeNull();
             expect(urlsToClashProxies([url])).toEqual([]);
         }
+    });
+
+    it('round-trips HTTP proxy exports through the builtin importer', () => {
+        const proxy = {
+            name: 'Fixture HTTP Export',
+            type: 'http',
+            server: 'http.example.com',
+            port: 8080,
+            username: 'user',
+            password: 'p@ss:word'
+        };
+
+        const url = convertClashProxyToUrl(proxy);
+        expect(url).toMatch(/^http:\/\/user:p%40ss%3Aword@http\.example\.com:8080#Fixture%20HTTP%20Export$/);
+        expect(urlToClashProxy(url)).toEqual(proxy);
     });
 });

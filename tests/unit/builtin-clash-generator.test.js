@@ -119,4 +119,61 @@ describe('Clash 内置生成器', () => {
         expect(parsed.rules).toContain('DOMAIN-SUFFIX,claude.ai,🤖 Claude');
         expect(parsed.rules).toContain('DOMAIN-SUFFIX,grok.com,🤖 Grok');
     });
+
+    it('应将无认证 HTTP 代理 URL 转换为 Clash http 节点', () => {
+        const node = 'http://103.169.189.174:3125';
+        const parsed = yaml.load(generateBuiltinClashConfig(node));
+
+        expect(parsed.proxies).toHaveLength(1);
+        expect(parsed.proxies[0].type).toBe('http');
+        expect(parsed.proxies[0].server).toBe('103.169.189.174');
+        expect(parsed.proxies[0].port).toBe(3125);
+        expect(parsed.proxies[0]).not.toHaveProperty('username');
+        expect(parsed.proxies[0]).not.toHaveProperty('password');
+    });
+
+    it('应保留带认证 HTTP 代理的用户名密码', () => {
+        const node = 'http://user:p%40ss@10.0.0.1:8080#HTTP-Auth';
+        const parsed = yaml.load(generateProxiesOnly(node));
+
+        expect(parsed.proxies[0].type).toBe('http');
+        expect(parsed.proxies[0].username).toBe('user');
+        expect(parsed.proxies[0].password).toBe('p@ss');
+    });
+
+    it('应支持无认证 SOCKS5 代理 URL', () => {
+        const node = 'socks5://199.66.182.232:4145';
+        const parsed = yaml.load(generateBuiltinClashConfig(node));
+
+        expect(parsed.proxies).toHaveLength(1);
+        expect(parsed.proxies[0].type).toBe('socks5');
+        expect(parsed.proxies[0].server).toBe('199.66.182.232');
+        expect(parsed.proxies[0].port).toBe(4145);
+        expect(parsed.proxies[0]).not.toHaveProperty('username');
+        expect(parsed.proxies[0]).not.toHaveProperty('password');
+    });
+
+    it('应继续解析带认证的 SOCKS5 代理 URL', () => {
+        const node = 'socks5://alice:s3cret@10.0.0.2:1080?tls=1';
+        const parsed = yaml.load(generateProxiesOnly(node));
+
+        expect(parsed.proxies[0].type).toBe('socks5-tls');
+        expect(parsed.proxies[0].username).toBe('alice');
+        expect(parsed.proxies[0].password).toBe('s3cret');
+    });
+
+    it('免费 HTTP/SOCKS 混合订阅导出不应再为空', () => {
+        const nodes = [
+            'http://103.169.189.174:3125',
+            'http://216.106.179.216:49292',
+            'socks5://199.66.182.232:4145',
+            'socks4://89.22.238.103:38871'
+        ].join('\n');
+
+        const result = generateBuiltinClashConfig(nodes);
+        expect(result).not.toContain('# No valid proxies found');
+
+        const parsed = yaml.load(result);
+        expect(parsed.proxies.map(proxy => proxy.type)).toEqual(['http', 'http', 'socks5']);
+    });
 });
