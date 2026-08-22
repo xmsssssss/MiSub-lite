@@ -182,3 +182,13 @@ describe('WebDAV backup payload and restore', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('https://dav.example/remote.php/dav/files/user/MiSub/misub-backup-2026-08-09%2012-00-00.json');
   });
 });
+
+describe('formatBackupFilename timezone', () => {
+  it('formats backup filenames in UTC+8', async () => {
+    const { formatBackupFilename } = await import('../../functions/modules/webdav-backup-handler.js');
+    const now = new Date('2026-08-10T16:30:45.000Z');
+
+    expect(formatBackupFilename('backup-{datetime}-{date}.json', now))
+      .toBe('backup-2026-08-11-00-30-45-2026-08-11.json');
+  });
+});

@@ -162,6 +162,7 @@ function formatProfileExpireTime(expiresAt) {
 
     const date = new Date(expiresAt);
     if (Number.isNaN(date.getTime())) return '未提供';
+    if (date.getTime() <= Date.now()) return '已到期';
 
     return date.toLocaleString('zh-CN', {
         timeZone: 'Asia/Shanghai',

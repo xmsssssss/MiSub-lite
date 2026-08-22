@@ -21,6 +21,7 @@ export const BACKUP_SCOPES = {
 
 const RESTORE_SNAPSHOT_KEY = 'misub_restore_snapshot_latest';
 const BACKUP_FILENAME_PREFIX = 'misub-backup-';
+const BACKUP_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_WEBDAV_CONFIG = {
     enabled: false,
     endpoint: '',
@@ -320,10 +321,11 @@ async function ensureRemoteDirectory(config) {
     }
 }
 
-function formatBackupFilename(template = DEFAULT_WEBDAV_CONFIG.filenameTemplate) {
-    const now = new Date();
-    const datetime = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const date = now.toISOString().slice(0, 10);
+export function formatBackupFilename(template = DEFAULT_WEBDAV_CONFIG.filenameTemplate, now = new Date()) {
+    // Keep backup names stable at UTC+8 regardless of the runtime timezone.
+    const utcPlus8 = new Date(now.getTime() + BACKUP_TIMEZONE_OFFSET_MS);
+    const datetime = utcPlus8.toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const date = utcPlus8.toISOString().slice(0, 10);
     const safeTemplate = template || DEFAULT_WEBDAV_CONFIG.filenameTemplate;
     return safeTemplate.replace(/\{datetime\}/g, datetime).replace(/\{date\}/g, date);
 }
