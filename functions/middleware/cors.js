@@ -143,10 +143,24 @@ export async function csrfOriginMiddleware(request, next, options = {}) {
     }
 
     // Reverse proxy: browser Origin is https://domain, internal request may be http://domain
+    // (e.g. Express adapter behind a proxy that omits X-Forwarded-Proto), or the proxy
+    // rewrites Host while forwarding the original host in X-Forwarded-Host.
     try {
         const sourceHost = new URL(sourceOrigin).hostname;
-        const requestHost = requestUrl.hostname;
-        if (sourceHost && requestHost && sourceHost === requestHost) {
+        const forwardedHosts = (request.headers.get('x-forwarded-host') || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean)
+            .map((value) => {
+                try {
+                    return new URL(value.includes('://') ? value : `http://${value}`).hostname;
+                } catch (_) {
+                    return '';
+                }
+            });
+        const requestHost = new URL(request.url).hostname;
+        const allowedHosts = new Set([requestHost, ...forwardedHosts]);
+        if (sourceHost && allowedHosts.has(sourceHost)) {
             return next();
         }
     } catch (_) {

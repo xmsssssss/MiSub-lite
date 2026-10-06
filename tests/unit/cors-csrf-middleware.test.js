@@ -40,7 +40,10 @@ function createKv(initial = {}) {
     };
 }
 
-const makeMiddlewareRequest = (url, { method = 'GET', origin, referer } = {}) => ({
+const makeMiddlewareRequest = (
+    url,
+    { method = 'GET', origin, referer, extraHeaders = {} } = {}
+) => ({
     url,
     method,
     headers: {
@@ -48,7 +51,8 @@ const makeMiddlewareRequest = (url, { method = 'GET', origin, referer } = {}) =>
             const key = String(name || '').toLowerCase();
             if (key === 'origin') return origin || null;
             if (key === 'referer') return referer || null;
-            return null;
+            const extra = extraHeaders[key];
+            return extra === undefined ? null : extra;
         },
     },
 });
@@ -126,6 +130,40 @@ describe('CORS and CSRF middleware hardening', () => {
         expect(bearerRequest.status).toBe(200);
         expect(cookieWithoutOrigin.status).toBe(403);
         expect(await cookieWithoutOrigin.text()).toContain('Origin Required');
+    });
+
+    it('allows reverse-proxy deployments: https Origin vs http request URL on the same host', async () => {
+        const protocolMismatch = await csrfOriginMiddleware(
+            makeMiddlewareRequest('http://sub.example.com/api/login', {
+                method: 'POST',
+                origin: 'https://sub.example.com',
+            }),
+            async () => new Response('ok'),
+            { origins: ['http://sub.example.com'] }
+        );
+        const forwardedHost = await csrfOriginMiddleware(
+            makeMiddlewareRequest('http://127.0.0.1:8787/api/login', {
+                method: 'POST',
+                origin: 'https://sub.example.com',
+                extraHeaders: { 'x-forwarded-host': 'sub.example.com' },
+            }),
+            async () => new Response('ok'),
+            { origins: ['http://127.0.0.1:8787'] }
+        );
+        const hostMismatch = await csrfOriginMiddleware(
+            makeMiddlewareRequest('http://127.0.0.1:8787/api/login', {
+                method: 'POST',
+                origin: 'https://evil.example',
+                extraHeaders: { 'x-forwarded-host': 'sub.example.com' },
+            }),
+            async () => new Response('should-not-run'),
+            { origins: ['http://127.0.0.1:8787'] }
+        );
+
+        expect(protocolMismatch.status).toBe(200);
+        expect(forwardedHost.status).toBe(200);
+        expect(hostMismatch.status).toBe(403);
+        expect(await hostMismatch.text()).toContain('Origin Not Allowed');
     });
 
     it('预检放行前端实际发送的自定义请求头（跨域部署必需）', async () => {
