@@ -111,3 +111,6 @@ data/*.sqlite
 data/*.sqlite-*
 /brain/
 /scratch/
+
+# AI assistant workspace data
+.workbuddy-ai/

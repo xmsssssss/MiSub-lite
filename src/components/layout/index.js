@@ -13,25 +13,25 @@ import AdaptiveGrid from './AdaptiveGrid.vue';
 import DashboardSkeleton from './DashboardSkeleton.vue';
 
 export {
-  Header,
-  NavBar,
-  BrandLogo,
-  NavActionGroup,
-  LoginEntryButton,
-  ExternalRepoButton,
-  AdaptiveGrid,
-  DashboardSkeleton
+    Header,
+    NavBar,
+    BrandLogo,
+    NavActionGroup,
+    LoginEntryButton,
+    ExternalRepoButton,
+    AdaptiveGrid,
+    DashboardSkeleton,
 };
 
 export const LayoutComponents = {
-  Header,
-  NavBar,
-  BrandLogo,
-  NavActionGroup,
-  LoginEntryButton,
-  ExternalRepoButton,
-  AdaptiveGrid,
-  DashboardSkeleton
+    Header,
+    NavBar,
+    BrandLogo,
+    NavActionGroup,
+    LoginEntryButton,
+    ExternalRepoButton,
+    AdaptiveGrid,
+    DashboardSkeleton,
 };
 
 export default LayoutComponents;
