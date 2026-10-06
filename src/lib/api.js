@@ -268,7 +268,8 @@ export async function migrateToD1() {
 
 export async function detectLegacyD1() {
     try {
-        return await api.get('/api/detect_legacy_d1');
+        // 服务端已将迁移/检测端点统一为 POST-only（CSRF 加固），GET 会 405
+        return await api.post('/api/detect_legacy_d1');
     } catch (error) {
         return handleApiError(error, 'detectLegacyD1');
     }
