@@ -60,6 +60,9 @@ function maskSensitiveLogValue(value) {
 
 const PROFILE_DOWNLOAD_COUNT_PREFIX = 'misub_profile_download_count_';
 
+// mytoken 仍为占位值 'auto' 时只警告一次，避免每个请求都刷日志
+let warnedDefaultMytoken = false;
+
 function getProfileDownloadCountKey(profile) {
     return `${PROFILE_DOWNLOAD_COUNT_PREFIX}${profile.customId || profile.id}`;
 }
@@ -730,11 +733,23 @@ export async function handleMisubRequest(context) {
                 }
             }
         } else {
-            return new Response('Profile not found or disabled', { status: 404 });
+            // [伪装加固] 与无效 token 的响应保持一致，
+            // 避免「token 有效但 profile 不存在」成为 token 有效性 oracle。
+            return (
+                createDisguiseResponse(settings?.disguise, request.url) ||
+                new Response('Not Found', { status: 404 })
+            );
         }
     } else {
-        // [修正] 使用 config 變量
-        if (!token || token !== config.mytoken) {
+        // [安全] 'auto' 是 SetupWizard/默认设置的占位值，属于公开已知凭据：
+        // 保留它等于把全量订阅挂在 /auto 这个任何人可猜到的路径上。
+        if (!token || config.mytoken === 'auto' || token !== config.mytoken) {
+            if (config.mytoken === 'auto' && !warnedDefaultMytoken) {
+                warnedDefaultMytoken = true;
+                console.warn(
+                    '[MiSub] mytoken 仍为默认占位值 "auto"，已拒绝提供全量订阅；请在「设置 → 基础设置」中修改订阅 Token'
+                );
+            }
             // [伪装加固] 同 profile token：避免裸 403 暴露服务存在
             return (
                 createDisguiseResponse(settings?.disguise, request.url) ||

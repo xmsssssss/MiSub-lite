@@ -1,5 +1,20 @@
 const REDACTED = '[REDACTED]';
 
+/**
+ * 常数时间字符串比较，用于密码 / token / secret 校验，
+ * 避免 === 的短路比较造成（理论上的）时序侧信道。
+ */
+export function timingSafeEqualString(a, b) {
+    const left = String(a || '');
+    const right = String(b || '');
+    if (left.length !== right.length) return false;
+    let diff = 0;
+    for (let i = 0; i < left.length; i += 1) {
+        diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+    }
+    return diff === 0;
+}
+
 const SENSITIVE_KEY_PATTERN =
     /(token|secret|password|passwd|pwd|key|cookie|authorization|auth|credential|webhook|uuid|url)$/i;
 const URL_KEY_PATTERN = /(url|uri|link|endpoint)$/i;

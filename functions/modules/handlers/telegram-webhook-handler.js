@@ -27,6 +27,7 @@ import { clearAllNodeCaches } from '../../services/node-cache-service.js';
 import { createJsonResponse, escapeHtml, JSON_BODY_LIMITS, readJsonWithLimit } from '../utils.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from '../config.js';
 import { extractValidNodes } from '../utils/node-parser.js';
+import { timingSafeEqualString, validatePublicNetworkUrl } from '../security-utils.js';
 
 // ==================== 存储与配置 ====================
 
@@ -36,6 +37,28 @@ import { extractValidNodes } from '../utils/node-parser.js';
 async function getStorageAdapter(env) {
     const storageType = await StorageFactory.getStorageType(env);
     return StorageFactory.createAdapter(env, storageType);
+}
+
+/** 读取响应体，超过 maxBytes 时截断，避免超大响应占满内存 */
+async function readBodyWithLimit(response, maxBytes) {
+    const reader = response.body?.getReader();
+    if (!reader) {
+        const text = await response.text();
+        return text.length > maxBytes ? text.slice(0, maxBytes) : text;
+    }
+    const chunks = [];
+    let received = 0;
+    while (received < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        chunks.push(value);
+    }
+    await reader.cancel().catch(() => {});
+    const decoder = new TextDecoder();
+    return (
+        chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join('') + decoder.decode()
+    );
 }
 
 function createRequestCache() {
@@ -749,8 +772,10 @@ async function answerCallbackQuery(callbackQueryId, text, env, showAlert = false
  * 验证 Telegram Webhook 请求
  */
 function verifyTelegramRequest(request, config) {
-    const secretToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
-    return secretToken === config.webhook_secret;
+    const secretToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token') || '';
+    const expected = String(config.webhook_secret || '');
+    if (!expected) return false; // 未配置 secret 时一律拒绝（fail closed）
+    return secretToken.length === expected.length && timingSafeEqualString(secretToken, expected);
 }
 
 function getUserBindingKey(userId) {
@@ -1467,7 +1492,11 @@ async function handleSearchCommand(chatId, userId, args, env) {
         });
 
         if (results.length === 0) {
-            await sendTelegramMessage(chatId, `🔍 未找到包含 "<b>${keyword}</b>" 的节点`, env);
+            await sendTelegramMessage(
+                chatId,
+                `🔍 未找到包含 "<b>${escapeHtml(keyword)}</b>" 的节点`,
+                env
+            );
             return;
         }
 
@@ -1477,7 +1506,7 @@ async function handleSearchCommand(chatId, userId, args, env) {
             const protocol = node.url.split('://')[0].toUpperCase();
             const status = node.enabled ? '✅' : '⛔';
             const originalIdx = userNodes.indexOf(node) + 1;
-            message += `<b>${originalIdx}.</b> ${status} ${node.name} (${protocol})\n`;
+            message += `<b>${originalIdx}.</b> ${status} ${escapeHtml(node.name || '未命名')} (${protocol})\n`;
         });
 
         if (results.length > 10) {
@@ -1733,7 +1762,7 @@ async function handleInfoCommand(chatId, userId, args, env) {
         } catch {}
 
         let message = `📄 <b>节点详情 #${idx + 1}</b>\n\n`;
-        message += `<b>名称：</b>${node.name}\n`;
+        message += `<b>名称：</b>${escapeHtml(node.name || '未命名')}\n`;
         message += `<b>协议：</b>${protocol}\n`;
         message += `<b>状态：</b>${status}\n`;
         message += `<b>ID：</b><code>${node.id}</code>\n`;
@@ -1809,7 +1838,7 @@ async function handleCopyCommand(chatId, userId, args, env) {
             const node = userNodes[indicesToCopy[0]];
             await sendTelegramMessage(
                 chatId,
-                `📋 <b>${node.name}</b>\n\n<code>${node.url}</code>\n\n点击上方链接可复制`,
+                `📋 <b>${escapeHtml(node.name || '未命名')}</b>\n\n<code>${escapeHtml(node.url)}</code>\n\n点击上方链接可复制`,
                 env
             );
         } else {
@@ -1920,19 +1949,33 @@ async function handleImportCommand(chatId, userId, args, env) {
             await sendTelegramMessage(chatId, '⏳ 正在获取订阅内容...', env);
 
             try {
-                const response = await fetch(input, {
-                    method: 'GET',
-                    headers: {
-                        'User-Agent': 'v2rayN/7.23',
-                        Accept: '*/*',
-                    },
-                });
+                // [SSRF 防护] 拒绝内网 / 环回 / 元数据地址，并限制读取大小与超时
+                const validation = validatePublicNetworkUrl(input);
+                if (!validation.ok) {
+                    throw new Error('仅允许公网 http(s) 订阅链接');
+                }
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15000);
+                let response;
+                try {
+                    response = await fetch(validation.url.toString(), {
+                        method: 'GET',
+                        headers: {
+                            'User-Agent': 'v2rayN/7.23',
+                            Accept: '*/*',
+                        },
+                        signal: controller.signal,
+                    });
+                } finally {
+                    clearTimeout(timer);
+                }
 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
 
-                const content = await response.text();
+                const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+                const content = await readBodyWithLimit(response, MAX_IMPORT_BYTES);
 
                 // 尝试 Base64 解码
                 try {
@@ -2142,7 +2185,7 @@ async function handleDupCommand(chatId, userId, args, env) {
 
             duplicates.slice(0, 5).forEach(({ idx, node, originalIdx }) => {
                 message += `• #${idx + 1} 与 #${originalIdx + 1} 重复\n`;
-                message += `  ${node.name}\n`;
+                message += `  ${escapeHtml(node.name || '未命名')}\n`;
             });
 
             if (duplicates.length > 5) {

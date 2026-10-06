@@ -103,6 +103,9 @@ export async function handleApiRequest(request, env, context = null) {
 
     // [新增] 数据存储迁移接口 (KV -> D1)
     if (path === '/migrate_to_d1') {
+        if (request.method !== 'POST') {
+            return createErrorResponse('Method Not Allowed', 405);
+        }
         if (!(await authMiddleware(request, env))) {
             return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
@@ -144,6 +147,9 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     if (path === '/detect_legacy_d1') {
+        if (request.method !== 'POST') {
+            return createErrorResponse('Method Not Allowed', 405);
+        }
         if (!(await authMiddleware(request, env))) {
             return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
@@ -157,6 +163,9 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     if (path === '/migrate_legacy_d1') {
+        if (request.method !== 'POST') {
+            return createErrorResponse('Method Not Allowed', 405);
+        }
         if (!(await authMiddleware(request, env))) {
             return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
@@ -186,6 +195,9 @@ export async function handleApiRequest(request, env, context = null) {
 
     // [新增] 安全的、可重复执行的迁移接口
     if (path === '/migrate') {
+        if (request.method !== 'POST') {
+            return createErrorResponse('Method Not Allowed', 405);
+        }
         if (!(await authMiddleware(request, env))) {
             return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
@@ -295,10 +307,13 @@ export async function handleApiRequest(request, env, context = null) {
         return await handleLogout(request);
     }
 
-    // 认证调试端点（默认关闭，不返回敏感值）
+    // 认证调试端点（默认关闭，不返回敏感值；开启后也必须已登录）
     if (path === '/auth_debug') {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
+        }
+        if (!(await authMiddleware(request, env))) {
+            return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
         const debugInfo = await getAuthDebugInfo(env);
         const authDiagnostic = await getAuthSessionDiagnostic(request, env);
@@ -310,13 +325,16 @@ export async function handleApiRequest(request, env, context = null) {
         });
     }
 
-    // 登录密码调试端点（默认关闭，不返回敏感值）
+    // 登录密码调试端点（默认关闭，不返回敏感值；开启后也必须已登录）
     if (path === '/auth_check') {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
         if (request.method !== 'POST') {
             return createJsonResponse({ error: 'Method Not Allowed' }, 405);
+        }
+        if (!(await authMiddleware(request, env))) {
+            return createJsonResponse({ error: 'Unauthorized' }, 401);
         }
         const diagnostic = await getLoginPasswordDiagnostic(request, env);
         return createJsonResponse(diagnostic, diagnostic.success ? 200 : 400);
@@ -340,6 +358,9 @@ export async function handleApiRequest(request, env, context = null) {
 
     // KV 诊断端点：测试 KV 读写是否正常（需登录）
     if (path === '/kv_test') {
+        if (request.method !== 'POST') {
+            return createErrorResponse('Method Not Allowed', 405);
+        }
         try {
             const kv = StorageFactory.resolveKV(env);
             if (!kv) {

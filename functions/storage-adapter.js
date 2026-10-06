@@ -419,7 +419,15 @@ class D1StorageAdapter {
 
                 const all = [];
                 results.results.forEach((row) => {
-                    const parsed = JSON.parse(row.data);
+                    // [数据安全] 单行损坏时跳过该行而不是抛错：
+                    // 抛错会让整个集合返回 []，前端下一次保存就会把真实数据清空。
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(row.data);
+                    } catch (error) {
+                        console.error('[D1] Skip corrupt subscription row:', error?.message);
+                        return;
+                    }
                     if (Array.isArray(parsed)) {
                         all.push(...parsed);
                     } else if (parsed) {
@@ -474,7 +482,14 @@ class D1StorageAdapter {
 
                 const all = [];
                 results.results.forEach((row) => {
-                    const parsed = JSON.parse(row.data);
+                    // [数据安全] 同 getAllSubscriptions：坏行跳过，防止整集合被清空
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(row.data);
+                    } catch (error) {
+                        console.error('[D1] Skip corrupt profile row:', error?.message);
+                        return;
+                    }
                     if (Array.isArray(parsed)) {
                         all.push(...parsed);
                     } else if (parsed) {

@@ -1,6 +1,17 @@
 import { createJsonResponse, createErrorResponse } from '../utils.js';
 import { StorageFactory, STORAGE_TYPES } from '../../storage-adapter.js';
 
+// 公开端点的外呼预算：防止有人循环随机 repo 打爆 GitHub 配额 / 灌满缓存
+const GITHUB_PROXY_MAX_FETCHES_PER_MINUTE = 30;
+const GITHUB_PROXY_MAX_CACHED_BODY_LENGTH = 8192;
+const githubFetchTimestamps = [];
+
+function pruneGithubBudget(now = Date.now()) {
+    while (githubFetchTimestamps.length && now - githubFetchTimestamps[0] >= 60 * 1000) {
+        githubFetchTimestamps.shift();
+    }
+}
+
 /**
  * Handle proxied GitHub release requests with caching
  * GET /api/github/release?repo=owner/repo
@@ -31,6 +42,15 @@ export async function handleGithubReleaseRequest(request, env) {
                 });
             }
         }
+
+        pruneGithubBudget();
+        if (githubFetchTimestamps.length >= GITHUB_PROXY_MAX_FETCHES_PER_MINUTE) {
+            return createJsonResponse({ tag_name: null, rate_limited: true }, 200, {
+                'X-Cache-Status': 'RATE_LIMITED',
+                'Cache-Control': 'public, max-age=300',
+            });
+        }
+        githubFetchTimestamps.push(Date.now());
 
         // Fetch from GitHub
         const githubUrl = `https://api.github.com/repos/${repo}/releases/latest`;
@@ -75,13 +95,17 @@ export async function handleGithubReleaseRequest(request, env) {
 
         const data = await response.json();
 
-        // Extract only needed fields
+        // Extract only needed fields (body 截断，避免超大 release note 灌爆存储)
+        const rawBody = typeof data.body === 'string' ? data.body : '';
         const simplifiedData = {
             tag_name: data.tag_name,
             html_url: data.html_url,
             published_at: data.published_at,
             name: data.name,
-            body: data.body || '',
+            body:
+                rawBody.length > GITHUB_PROXY_MAX_CACHED_BODY_LENGTH
+                    ? rawBody.slice(0, GITHUB_PROXY_MAX_CACHED_BODY_LENGTH) + '…'
+                    : rawBody,
         };
 
         const cachePayload = {

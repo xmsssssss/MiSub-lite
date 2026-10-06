@@ -9,12 +9,15 @@ import {
     getAdminPassword,
     setAdminPassword,
     isUsingDefaultPassword,
+    putSystemSettingValue,
+    SYSTEM_COOKIE_SECRET_KEY,
     createJsonResponse,
     createErrorResponse,
     migrateProfileIds,
     JSON_BODY_LIMITS,
     readJsonWithLimit,
 } from './utils.js';
+import { timingSafeEqualString } from './security-utils.js';
 import {
     authMiddleware,
     handleLogin,
@@ -787,6 +790,12 @@ export async function handlePublicProfilesRequest(env) {
                 manualNodeCount: (p.manualNodes || []).length,
             }));
 
+        // [安全] profileToken 是访问「所有」订阅组（含未公开的）的全局凭据，
+        // 只有在公开页启用且确实存在公开订阅组（即前端确实需要拼接订阅链接）时才返回，
+        // 避免在默认/空配置下向任意访客泄露全局 token。
+        const includeProfileToken =
+            (settings.enablePublicPage ?? true) === true && publicProfiles.length > 0;
+
         // Custom Page Config
         const customPage = {
             enabled: settings.customPage?.enabled || false,
@@ -805,7 +814,7 @@ export async function handlePublicProfilesRequest(env) {
             success: true,
             data: publicProfiles,
             config: {
-                profileToken,
+                ...(includeProfileToken ? { profileToken } : {}),
                 announcement,
                 hero,
                 guestbook,
@@ -881,6 +890,29 @@ export async function handleSetupRequest(request, env) {
         }
 
         const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
+
+        // [安全] node-local 运行时下，首次初始化必须携带服务端启动时
+        // 生成并打印在控制台的 Setup Token，防止部署后被人扫描抢占。
+        if (env.MISUB_RUNTIME === 'node-local') {
+            const expectedToken = env.MISUB_SETUP_TOKEN;
+            if (!expectedToken) {
+                return createErrorResponse(
+                    '初始化令牌未生成：请重启服务，并从控制台输出中获取 Setup Token',
+                    500
+                );
+            }
+            const providedToken = String(body?.setupToken || '').trim();
+            if (
+                providedToken.length !== expectedToken.length ||
+                !timingSafeEqualString(providedToken, expectedToken)
+            ) {
+                return createErrorResponse(
+                    '初始化令牌错误：请查看服务端控制台输出的 Setup Token',
+                    403
+                );
+            }
+        }
+
         const password = String(body?.password || body?.adminPassword || '').trim();
         const confirmPassword = String(body?.confirmPassword || '').trim();
 
@@ -966,6 +998,9 @@ export async function handleSetupRequest(request, env) {
             }
         }
 
+        // 一次性：初始化成功后立即失效 Setup Token
+        env.MISUB_SETUP_TOKEN = undefined;
+
         return createJsonResponse({
             success: true,
             message: '初始化完成，请使用新密码登录',
@@ -989,14 +1024,49 @@ export async function handleUpdatePassword(request, env) {
     }
 
     try {
-        const { password } = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
+        const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
+        const { password, currentPassword } = body || {};
 
         if (!password || typeof password !== 'string' || password.length < 6) {
             return createErrorResponse('密码必须至少6位字符', 400);
         }
 
+        // 必须验证当前密码，防止会话被劫持后静默改锁
+        const providedCurrent = String(currentPassword || '').trim();
+        const actualCurrent = String(await getAdminPassword(env)).trim();
+        if (
+            !providedCurrent ||
+            providedCurrent.length !== actualCurrent.length ||
+            !timingSafeEqualString(providedCurrent, actualCurrent)
+        ) {
+            return createErrorResponse('当前密码错误', 401);
+        }
+
         await setAdminPassword(env, password);
-        return createJsonResponse({ success: true, message: '密码已更新' });
+
+        // 轮换 Cookie Secret：所有旧会话令牌立即失效（包括可能被窃取的）
+        try {
+            const newSecret = crypto.randomUUID();
+            env.COOKIE_SECRET = newSecret;
+            const persistedSecret = await putSystemSettingValue(
+                env,
+                SYSTEM_COOKIE_SECRET_KEY,
+                newSecret
+            );
+            if (typeof env.persistLocalCookieSecret === 'function') {
+                await env.persistLocalCookieSecret(newSecret);
+            }
+            if (!persistedSecret && typeof env.persistLocalCookieSecret !== 'function') {
+                console.warn('[Auth] Cookie Secret 轮换未持久化，重启后旧会话可能恢复');
+            }
+        } catch (rotateError) {
+            console.warn('[Auth] Cookie Secret 轮换失败（密码已更新）:', rotateError?.message);
+        }
+
+        return createJsonResponse({
+            success: true,
+            message: '密码已更新，所有登录会话已失效，请使用新密码重新登录',
+        });
     } catch (e) {
         console.error('[API Error /settings/password]', e);
         return createErrorResponse('Failed to update password', 500);

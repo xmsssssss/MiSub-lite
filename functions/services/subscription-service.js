@@ -17,7 +17,7 @@ import {
 } from '../utils/node-utils.js';
 import { runOperatorChain } from '../utils/operator-runner.js';
 import { createTimeoutFetch } from '../modules/utils.js';
-import { assertPublicNetworkUrl } from '../modules/security-utils.js';
+import { assertPublicNetworkUrl, validatePublicNetworkUrl } from '../modules/security-utils.js';
 import { isSuspiciousNodeCountDrop } from './node-cache-service.js';
 
 /**
@@ -246,24 +246,56 @@ export async function fetchAirportSiteTitle(rootDomain, options = {}) {
     const domain = String(rootDomain || '').trim();
     if (!domain || !domain.includes('.')) return '';
 
+    // [SSRF 防护] 域名由（可能是内部地址的）订阅 URL 推导而来，
+    // 抓取前必须校验目标是公网地址，且重定向每一跳都重新校验。
+    const initialValidation = validatePublicNetworkUrl(`https://${domain}/`);
+    if (!initialValidation.ok) return '';
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
-        const response = await fetch(`https://${domain}/`, {
-            method: 'GET',
-            headers: {
-                'User-Agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-                Accept: 'text/html,application/xhtml+xml',
-            },
-            redirect: 'follow',
-            signal: controller.signal,
-        });
-        if (!response.ok) return '';
+        let currentUrl = initialValidation.url.toString();
+        let response = null;
+        for (let hop = 0; hop <= 2; hop += 1) {
+            response = await fetch(currentUrl, {
+                method: 'GET',
+                headers: {
+                    'User-Agent':
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                    Accept: 'text/html,application/xhtml+xml',
+                },
+                redirect: 'manual',
+                signal: controller.signal,
+            });
+            if (![301, 302, 303, 307, 308].includes(response.status)) break;
+            const location = response.headers.get('Location');
+            if (!location || hop === 2) return '';
+            const nextValidation = validatePublicNetworkUrl(
+                new URL(location, currentUrl).toString()
+            );
+            if (!nextValidation.ok) return '';
+            currentUrl = nextValidation.url.toString();
+        }
+        if (!response || !response.ok) return '';
 
-        // 只读前 64KB，标题一定在 <head> 里
-        const text = (await response.text()).slice(0, 65536);
-        const match = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        // 只读前 64KB，标题一定在 <head> 里（流式读取，避免整个大文件进内存）
+        const reader = response.body?.getReader();
+        let text = '';
+        if (reader) {
+            const decoder = new TextDecoder();
+            let received = 0;
+            while (received < 65536) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                received += value.byteLength;
+                text += decoder.decode(value, { stream: true });
+            }
+            text += decoder.decode();
+            await reader.cancel().catch(() => {});
+        } else {
+            text = (await response.text()).slice(0, 65536);
+        }
+        const match = text.slice(0, 65536).match(/<title[^>]*>([\s\S]*?)<\/title>/i);
         if (!match) return '';
 
         const title = match[1]

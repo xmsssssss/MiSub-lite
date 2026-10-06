@@ -19,6 +19,7 @@
     const { t } = useI18n();
 
     const passwordForm = ref({
+        currentPassword: '',
         newPassword: '',
         confirmPassword: '',
     });
@@ -86,17 +87,25 @@
             showToast(t('systemSettings.passwordTooShort'), 'error');
             return;
         }
+        if (!passwordForm.value.currentPassword) {
+            showToast(t('systemSettings.currentPasswordRequired'), 'error');
+            return;
+        }
 
         isUpdatingPassword.value = true;
         try {
             const res = await fetch('/api/settings/password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: passwordForm.value.newPassword }),
+                body: JSON.stringify({
+                    currentPassword: passwordForm.value.currentPassword,
+                    password: passwordForm.value.newPassword,
+                }),
             });
             const data = await res.json();
             if (data.success) {
-                showToast(t('systemSettings.passwordUpdated'), 'success');
+                showToast(data.message || t('systemSettings.passwordUpdated'), 'success');
+                passwordForm.value.currentPassword = '';
                 passwordForm.value.newPassword = '';
                 passwordForm.value.confirmPassword = '';
             } else {
@@ -353,6 +362,15 @@ CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON settings(updated_at);`;
                 class="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white/70 dark:bg-gray-900/50 p-6 misub-radius-lg border border-gray-200/70 dark:border-white/10"
             >
                 <div class="space-y-4">
+                    <div>
+                        <Input
+                            :label="t('systemSettings.currentPassword')"
+                            v-model="passwordForm.currentPassword"
+                            type="password"
+                            :placeholder="t('systemSettings.currentPasswordPlaceholder')"
+                            class="misub-radius-lg"
+                        />
+                    </div>
                     <div>
                         <Input
                             :label="t('systemSettings.newPassword')"

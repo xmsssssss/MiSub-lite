@@ -10,11 +10,44 @@ import {
     JSON_BODY_LIMITS,
     readJsonWithLimit,
 } from '../utils.js';
-import { sendTgNotification } from '../notifications.js';
+import { sendTgNotification, tgEscape } from '../notifications.js';
 import { KV_KEY_GUESTBOOK, KV_KEY_SETTINGS, DEFAULT_SETTINGS } from '../config.js';
 
 const GUESTBOOK_INDEX_KEY = `${KV_KEY_GUESTBOOK}_index`;
 const GUESTBOOK_ITEM_PREFIX = `${KV_KEY_GUESTBOOK}:item:`;
+
+// ---- 公开留言限频（进程内存，防止匿名刷库与 TG 通知轰炸）----
+const GUESTBOOK_COOLDOWN_MS = 60 * 1000;
+const GUESTBOOK_MAX_PER_MINUTE = 5;
+const GUESTBOOK_MAX_TOTAL_MESSAGES = 500;
+const guestbookPostTimestamps = new Map(); // fingerprint -> [ts]
+const guestbookGlobalTimestamps = [];
+
+function pruneGuestbookBudgets(now = Date.now()) {
+    for (const [fingerprint, timestamps] of guestbookPostTimestamps.entries()) {
+        const recent = timestamps.filter((ts) => now - ts < GUESTBOOK_COOLDOWN_MS);
+        if (recent.length === 0) {
+            guestbookPostTimestamps.delete(fingerprint);
+        } else {
+            guestbookPostTimestamps.set(fingerprint, recent);
+        }
+    }
+    while (guestbookGlobalTimestamps.length && now - guestbookGlobalTimestamps[0] >= 60 * 1000) {
+        guestbookGlobalTimestamps.shift();
+    }
+}
+
+function isGuestbookRateLimited(fingerprint, now = Date.now()) {
+    pruneGuestbookBudgets(now);
+    const perFingerprint = guestbookPostTimestamps.get(fingerprint) || [];
+    if (perFingerprint.length > 0) return true; // 同一指纹 60s 冷却
+    return guestbookGlobalTimestamps.length >= GUESTBOOK_MAX_PER_MINUTE;
+}
+
+function recordGuestbookPost(fingerprint, now = Date.now()) {
+    guestbookPostTimestamps.set(fingerprint, [now]);
+    guestbookGlobalTimestamps.push(now);
+}
 
 /**
  * 获取存储适配器实例
@@ -127,12 +160,29 @@ export async function handleGuestbookPost(request, env) {
         const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.small);
         const { nickname, content, type } = body;
 
+        // 服务端限频：同一来源 60s 内只能发一条，全局限每分钟 5 条
+        const fingerprintSource =
+            request?.headers?.get('x-forwarded-for')?.split(',')[0].trim() ||
+            request?.headers?.get('cf-connecting-ip') ||
+            'unknown';
+        const fingerprint = `${fingerprintSource}`;
+        if (isGuestbookRateLimited(fingerprint)) {
+            return createErrorResponse('留言太频繁，请稍后再试', 429);
+        }
+
         // 基础验证
         if (!content || content.trim().length === 0) {
             return createErrorResponse('留言内容不能为空', 400);
         }
         if (content.length > 500) {
             return createErrorResponse('留言内容过长（最大500字）', 400);
+        }
+
+        // 总量上限：防止存储被无限灌满
+        const existingIndex = await storageAdapter.get(GUESTBOOK_INDEX_KEY);
+        const existingIds = Array.isArray(existingIndex) ? existingIndex : [];
+        if (existingIds.length >= GUESTBOOK_MAX_TOTAL_MESSAGES) {
+            return createErrorResponse('留言数量已达上限，请管理员清理后再试', 403);
         }
 
         let finalNickname = nickname ? nickname.trim() : '匿名用户';
@@ -155,14 +205,15 @@ export async function handleGuestbookPost(request, env) {
 
         // 保存
         await persistGuestbookMessage(storageAdapter, newMessage);
+        recordGuestbookPost(fingerprint);
 
-        // 发送通知给管理员
+        // 发送通知给管理员（转义用户输入，防止 TG HTML 注入）
         try {
             const messageText =
                 `📝 *新留言提醒*\n\n` +
-                `*用户*: ${finalNickname}\n` +
-                `*类型*: ${newMessage.type}\n` +
-                `*内容*: ${newMessage.content}\n` +
+                `*用户*: ${tgEscape(finalNickname)}\n` +
+                `*类型*: ${tgEscape(newMessage.type)}\n` +
+                `*内容*: ${tgEscape(newMessage.content)}\n` +
                 `*状态*: ${newMessage.isVisible ? '🟢 已显示' : '🔴 待审核'}`;
             await sendTgNotification(settings, messageText);
         } catch (notifyError) {

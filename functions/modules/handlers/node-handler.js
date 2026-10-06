@@ -542,6 +542,9 @@ export async function handleBatchUpdateNodesRequest(request, env) {
         // 单个订阅超时时间（毫秒）
         const SINGLE_SUB_TIMEOUT = 15000;
 
+        // 跟随「内置转换跳过证书校验」设置，而不是无条件关闭校验
+        const batchFetchCfOptions = await resolveNodeCountFetchCfOptions(env);
+
         // 并行获取所有订阅的节点（带超时）
         const updatePromises = targetSubscriptions.map(async (subscription) => {
             try {
@@ -568,7 +571,7 @@ export async function handleBatchUpdateNodesRequest(request, env) {
                         headers: { 'User-Agent': effectiveUserAgent },
                         redirect: 'follow',
                     }),
-                    { cf: { insecureSkipVerify: true } }
+                    { cf: batchFetchCfOptions }
                 );
 
                 const timeoutPromise = new Promise((_, reject) =>

@@ -19,6 +19,7 @@ import { StorageFactory, SettingsCache } from './storage-adapter.js';
 import { KV_KEY_SETTINGS, DEFAULT_SETTINGS as defaultSettings } from './modules/config.js';
 import { handleCronTrigger } from './modules/notifications.js';
 import { authMiddleware, renewAuthSession } from './modules/auth-middleware.js';
+import { timingSafeEqualString } from './modules/security-utils.js';
 
 function parseCorsOrigins(env, requestUrl) {
     const configured = (env?.CORS_ORIGINS || '')
@@ -177,20 +178,21 @@ export async function onRequest(context) {
                 const expectedSecret = settings.cronSecret;
 
                 if (!expectedSecret) {
-                    return createJsonResponse(
-                        {
-                            error: 'Cron Secret 未配置',
-                            hint: '请在设置页面的「自动任务配置」中设置 Cron Secret',
-                        },
-                        500
-                    );
+                    // [伪装加固] 未配置 secret 时返回 404 而非 500+提示文案，
+                    // 避免向扫描器指纹识别出这是一个 MiSub 实例及其配置状态。
+                    return new Response('Not Found', { status: 404 });
                 }
 
-                const cronAuthHeader = request.headers.get('Authorization');
-                const cronSecretParam = url.searchParams.get('secret');
+                const cronAuthHeader = request.headers.get('Authorization') || '';
+                const cronSecretParam = url.searchParams.get('secret') || '';
+                const bearerSecret = cronAuthHeader.startsWith('Bearer ')
+                    ? cronAuthHeader.slice(7)
+                    : '';
                 const isAuthorized =
-                    cronAuthHeader === `Bearer ${expectedSecret}` ||
-                    cronSecretParam === expectedSecret;
+                    (bearerSecret.length === expectedSecret.length &&
+                        timingSafeEqualString(bearerSecret, expectedSecret)) ||
+                    (cronSecretParam.length === expectedSecret.length &&
+                        timingSafeEqualString(cronSecretParam, expectedSecret));
 
                 if (!isAuthorized) {
                     return createJsonResponse({ error: 'Unauthorized' }, 401);

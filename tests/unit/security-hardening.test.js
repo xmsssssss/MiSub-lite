@@ -19,6 +19,7 @@ import { SESSION_DURATION, SESSION_RENEW_THRESHOLD } from '../../functions/modul
 import { handleMisubRequest } from '../../functions/modules/subscription/main-handler.js';
 import { logAccessSuccess } from '../../functions/modules/subscription/access-logger.js';
 import { LogService } from '../../functions/services/log-service.js';
+import { SettingsCache } from '../../functions/storage-adapter.js';
 import { onRequest } from '../../functions/[[path]].js';
 
 function createKv(initial = {}) {
@@ -302,14 +303,13 @@ describe('security hardening', () => {
             ENABLE_AUTH_DIAGNOSTICS: 'true',
         };
 
+        // 即使显式开启诊断，未登录会话也不允许访问（避免密码长度/匹配 oracle）
         const response = await handleApiRequest(
             new Request('https://example.com/api/auth_debug'),
             env
         );
-        const body = await response.json();
 
-        expect(response.status).toBe(200);
-        expect(body.success).toBe(true);
+        expect(response.status).toBe(401);
     });
 
     it('supports cron query secret compatibility and Authorization bearer', async () => {
@@ -695,5 +695,163 @@ describe('security hardening', () => {
         expect(body.fullResult).toBeUndefined();
         expect(text).not.toContain('debug-token-secret');
         expect(text).not.toContain('debug-node-password@server.example');
+    });
+
+    it('requires the one-time setup token before /api/setup can take over a fresh node-local deploy', async () => {
+        const env = {
+            MISUB_RUNTIME: 'node-local',
+            MISUB_SETUP_TOKEN: 'setup-token-secret',
+            MISUB_DB: createD1(),
+        };
+        const setupRequest = (body) =>
+            handleApiRequest(
+                new Request('https://example.com/api/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                }),
+                env
+            );
+
+        const noToken = await setupRequest({ password: 'new-pass-123' });
+        const wrongToken = await setupRequest({ password: 'new-pass-123', setupToken: 'wrong' });
+
+        expect(noToken.status).toBe(403);
+        expect(wrongToken.status).toBe(403);
+    });
+
+    it('requires the current password when changing the admin password and invalidates sessions', async () => {
+        const env = {
+            MISUB_DB: createD1(),
+            COOKIE_SECRET: 'stable-cookie-secret',
+            ADMIN_PASSWORD: 'secret-password',
+        };
+        const token = await createSignedToken('stable-cookie-secret', String(Date.now()));
+        // happy-dom 的 Request 会剥离 Cookie 头（forbidden header），
+        // 因此用带 headers.get/text 的普通对象模拟已登录请求。
+        const passwordRequest = (body) => ({
+            url: 'https://example.com/api/settings/password',
+            method: 'POST',
+            headers: {
+                get(name) {
+                    const key = String(name || '').toLowerCase();
+                    if (key === 'cookie') return `auth_session=${token}`;
+                    if (key === 'content-type') return 'application/json';
+                    return null;
+                },
+            },
+            async text() {
+                return JSON.stringify(body);
+            },
+        });
+
+        const missingCurrent = await handleApiRequest(
+            passwordRequest({ password: 'new-pass-123' }),
+            env
+        );
+        const wrongCurrent = await handleApiRequest(
+            passwordRequest({ password: 'new-pass-123', currentPassword: 'nope' }),
+            env
+        );
+
+        expect(missingCurrent.status).toBe(401);
+        expect(wrongCurrent.status).toBe(401);
+
+        const ok = await handleApiRequest(
+            passwordRequest({ password: 'new-pass-123', currentPassword: 'secret-password' }),
+            env
+        );
+        expect(ok.status).toBe(200);
+
+        // Cookie Secret 已轮换：被窃取的旧会话令牌必须失效
+        const diagnostic = await getAuthSessionDiagnostic(passwordRequest({}), env);
+        expect(diagnostic.isAuthenticated).toBe(false);
+    });
+
+    it('does not leak the global profile token when there is no public content', async () => {
+        const privateOnly = {
+            MISUB_KV: createKv({
+                misub_profiles_v1: JSON.stringify([
+                    { id: 'p1', name: 'Private', enabled: true, isPublic: false },
+                ]),
+            }),
+        };
+        const withPublic = {
+            MISUB_KV: createKv({
+                misub_profiles_v1: JSON.stringify([
+                    { id: 'p1', name: 'Public', enabled: true, isPublic: true },
+                ]),
+            }),
+        };
+
+        const privateResponse = await handleApiRequest(
+            new Request('https://example.com/api/public/profiles'),
+            privateOnly
+        );
+        const publicResponse = await handleApiRequest(
+            new Request('https://example.com/api/public/profiles'),
+            withPublic
+        );
+        const privateBody = await privateResponse.json();
+        const publicBody = await publicResponse.json();
+
+        expect(privateBody.config).not.toHaveProperty('profileToken');
+        expect(publicBody.config.profileToken).toBe('profiles');
+    });
+
+    it('rejects GET on state-mutating migration endpoints', async () => {
+        const env = {
+            MISUB_KV: createKv(),
+            COOKIE_SECRET: 'stable-cookie-secret',
+        };
+        const token = await createSignedToken('stable-cookie-secret', String(Date.now()));
+        const response = await handleApiRequest(
+            new Request('https://example.com/api/migrate', {
+                headers: { Cookie: `auth_session=${token}` },
+            }),
+            env
+        );
+
+        expect(response.status).toBe(405);
+    });
+
+    it('returns 404 for /cron when no cron secret is configured (no fingerprint)', async () => {
+        SettingsCache.clear();
+        const env = {
+            ASSETS: createAssets(),
+            MISUB_DB: createD1(),
+        };
+
+        const response = await onRequest({
+            request: new Request('https://example.com/cron'),
+            env,
+            next: async () => new Response('next'),
+        });
+
+        expect(response.status).toBe(404);
+    });
+
+    it('refuses to serve the full subscription while mytoken is the default placeholder auto', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const env = {
+            MISUB_KV: createKv({
+                worker_settings_v1: JSON.stringify({ mytoken: 'auto' }),
+                misub_subscriptions_v1: JSON.stringify([]),
+                misub_profiles_v1: JSON.stringify([]),
+            }),
+        };
+
+        try {
+            const response = await handleMisubRequest({
+                request: new Request('https://example.com/auto', {
+                    headers: { 'User-Agent': 'clash-verge/1.0' },
+                }),
+                env,
+            });
+
+            expect(response.status).toBe(404);
+        } finally {
+            warnSpy.mockRestore();
+        }
     });
 });

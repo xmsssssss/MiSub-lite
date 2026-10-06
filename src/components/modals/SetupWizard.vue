@@ -6,14 +6,23 @@
 
     const password = ref('');
     const confirmPassword = ref('');
+    const setupToken = ref('');
     const showPassword = ref(false);
     const showAdvanced = ref(false);
     const isLoading = ref(false);
     const error = ref('');
 
+    function generateToken(length = 10) {
+        const bytes = new Uint8Array(length);
+        globalThis.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => b.toString(36).padStart(2, '0'))
+            .join('')
+            .slice(0, length);
+    }
+
     const siteName = ref('MiSub-lite');
     const publicUrl = ref('');
-    const subscriptionToken = ref('auto');
+    const subscriptionToken = ref(generateToken());
     const profileToken = ref('profiles');
     const customLoginPath = ref('login');
     const enablePublicPage = ref(true);
@@ -23,6 +32,7 @@
             password.value.length >= 6 &&
             password.value !== 'admin' &&
             password.value === confirmPassword.value &&
+            setupToken.value.trim().length > 0 &&
             !isLoading.value
         );
     });
@@ -41,6 +51,10 @@
             error.value = '两次输入的密码不一致';
             return;
         }
+        if (!setupToken.value.trim()) {
+            error.value = '请输入服务端控制台输出的 Setup Token';
+            return;
+        }
 
         isLoading.value = true;
         try {
@@ -50,6 +64,7 @@
                 body: JSON.stringify({
                     password: password.value,
                     confirmPassword: confirmPassword.value,
+                    setupToken: setupToken.value.trim(),
                     siteName: siteName.value,
                     publicUrl: publicUrl.value,
                     subscriptionToken: subscriptionToken.value,
@@ -102,6 +117,24 @@
             </div>
 
             <form @submit.prevent="submitSetup" class="space-y-4 relative z-10">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2"
+                        >Setup Token *</label
+                    >
+                    <input
+                        v-model="setupToken"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="服务端启动时控制台输出的初始化令牌"
+                        :disabled="isLoading"
+                        class="w-full bg-transparent border misub-radius-lg py-3 px-4 outline-none transition-all border-gray-200 dark:border-white/20 text-gray-900 dark:text-white placeholder-gray-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500/40 font-mono text-sm disabled:opacity-50"
+                    />
+                    <p class="mt-1.5 text-[11px] text-gray-400 dark:text-gray-500">
+                        首次启动时服务端控制台会打印一次性 Setup
+                        Token，用于防止部署后被他人抢占初始化
+                    </p>
+                </div>
+
                 <div>
                     <label class="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2"
                         >管理员密码 *</label

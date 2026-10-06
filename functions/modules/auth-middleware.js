@@ -12,7 +12,59 @@ import {
     RequestBodyTooLargeError,
     readJsonWithLimit,
 } from './utils.js';
+import { timingSafeEqualString } from './security-utils.js';
 import { StorageFactory } from '../storage-adapter.js';
+
+// ---- 登录失败限速（进程内存；node-local 单进程下即全局限速）----
+const LOGIN_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_MAX_FAILURES_PER_IP = 10;
+const LOGIN_MAX_FAILURES_GLOBAL = 60;
+const loginFailureTimestampsByIp = new Map();
+const globalLoginFailures = [];
+
+function getClientIpFromRequest(request) {
+    const forwarded = request?.headers?.get('x-forwarded-for');
+    if (forwarded) {
+        const first = String(forwarded).split(',')[0].trim();
+        if (first) return first;
+    }
+    return request?.headers?.get('cf-connecting-ip') || 'unknown';
+}
+
+function pruneLoginFailures(now = Date.now()) {
+    for (const [ip, timestamps] of loginFailureTimestampsByIp.entries()) {
+        const recent = timestamps.filter((ts) => now - ts < LOGIN_FAILURE_WINDOW_MS);
+        if (recent.length === 0) {
+            loginFailureTimestampsByIp.delete(ip);
+        } else {
+            loginFailureTimestampsByIp.set(ip, recent);
+        }
+    }
+    while (globalLoginFailures.length && now - globalLoginFailures[0] >= LOGIN_FAILURE_WINDOW_MS) {
+        globalLoginFailures.shift();
+    }
+}
+
+function recordLoginFailure(ip, now = Date.now()) {
+    pruneLoginFailures(now);
+    const timestamps = loginFailureTimestampsByIp.get(ip) || [];
+    timestamps.push(now);
+    loginFailureTimestampsByIp.set(ip, timestamps);
+    globalLoginFailures.push(now);
+}
+
+function clearLoginFailures(ip) {
+    loginFailureTimestampsByIp.delete(ip);
+}
+
+function isLoginRateLimited(ip, now = Date.now()) {
+    pruneLoginFailures(now);
+    const perIp = loginFailureTimestampsByIp.get(ip) || [];
+    return (
+        perIp.length >= LOGIN_MAX_FAILURES_PER_IP ||
+        globalLoginFailures.length >= LOGIN_MAX_FAILURES_GLOBAL
+    );
+}
 
 function normalizeSecret(value) {
     return String(value ?? '')
@@ -249,6 +301,7 @@ export async function renewAuthSession(request, env, response, diagnostic = null
  */
 export async function getLoginPasswordDiagnostic(request, env) {
     const debugInfo = await getAuthDebugInfo(env);
+    // 注意：不要返回任何长度字段——那会成为未认证场景下的密码长度 oracle。
     const result = {
         success: false,
         matched: false,
@@ -258,10 +311,6 @@ export async function getLoginPasswordDiagnostic(request, env) {
         },
         input: {
             provided: false,
-            normalizedLength: 0,
-        },
-        expected: {
-            normalizedLength: 0,
         },
     };
 
@@ -277,15 +326,15 @@ export async function getLoginPasswordDiagnostic(request, env) {
     const currentPassword = normalizeSecret(await getAdminPassword(env));
 
     result.input.provided = typeof payload?.password === 'string';
-    result.input.normalizedLength = inputPassword.length;
-    result.expected.normalizedLength = currentPassword.length;
 
     if (!result.input.provided) {
         result.reason = 'missing_password';
         return result;
     }
 
-    result.matched = inputPassword === currentPassword;
+    result.matched =
+        inputPassword.length === currentPassword.length &&
+        timingSafeEqualString(inputPassword, currentPassword);
     result.success = true;
     result.reason = result.matched ? 'matched' : 'mismatch';
     return result;
@@ -341,9 +390,22 @@ export async function handleLogin(request, env) {
         const { password } = payload || {};
         const inputPassword = normalizeSecret(password);
         const currentPassword = normalizeSecret(await getAdminPassword(env));
-        const isPasswordMatched = inputPassword === currentPassword;
+        const clientIp = getClientIpFromRequest(request);
+        if (isLoginRateLimited(clientIp)) {
+            return new Response(JSON.stringify({ error: '尝试次数过多，请稍后再试' }), {
+                status: 429,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Retry-After': '60',
+                },
+            });
+        }
+        const isPasswordMatched =
+            inputPassword.length === currentPassword.length &&
+            timingSafeEqualString(inputPassword, currentPassword);
 
         if (isPasswordMatched) {
+            clearLoginFailures(clientIp);
             const secret = await getCookieSecret(env);
             const token = await createSignedToken(secret, String(Date.now()));
             const isSecure = request.url.startsWith('https');
@@ -363,6 +425,7 @@ export async function handleLogin(request, env) {
                 },
             });
         }
+        recordLoginFailure(clientIp);
         return new Response(JSON.stringify({ error: '密码错误' }), { status: 401 });
     } catch (e) {
         console.error('[API Error /login] Login handler failed', { ...logMeta, error: e?.message });

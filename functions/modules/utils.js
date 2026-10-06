@@ -149,7 +149,7 @@ export async function conditionalKVPut(env, key, newData, oldData = null) {
 }
 
 const SYSTEM_ADMIN_PASSWORD_KEY = 'SYSTEM_ADMIN_PASSWORD';
-const SYSTEM_COOKIE_SECRET_KEY = 'SYSTEM_COOKIE_SECRET';
+export const SYSTEM_COOKIE_SECRET_KEY = 'SYSTEM_COOKIE_SECRET';
 
 async function getSystemSettingValue(env, key) {
     if (!env?.MISUB_DB) return null;
@@ -172,7 +172,7 @@ async function getSystemSettingValue(env, key) {
     }
 }
 
-async function putSystemSettingValue(env, key, value) {
+export async function putSystemSettingValue(env, key, value) {
     if (!env?.MISUB_DB) return false;
     try {
         const data = typeof value === 'string' ? value : JSON.stringify(value);
@@ -360,6 +360,8 @@ export async function setAdminPassword(env, newPassword) {
         persisted = persisted || ok;
     }
 
+    const hadRuntimeEnvPassword = Boolean(getRuntimeEnvValue(env, 'ADMIN_PASSWORD'));
+
     if (typeof env?.persistLocalAdminPassword === 'function') {
         try {
             await env.persistLocalAdminPassword(password);
@@ -375,7 +377,9 @@ export async function setAdminPassword(env, newPassword) {
     // 当前进程立即生效（配置文件 / 环境变量路径）
     env.ADMIN_PASSWORD = password;
 
-    if (!persisted && !getRuntimeEnvValue(env, 'ADMIN_PASSWORD')) {
+    // 注意：必须在覆盖 env.ADMIN_PASSWORD 之前快照运行时来源，
+    // 否则这里的守卫永远不会触发，密码会静默回退为默认 admin。
+    if (!persisted && !hadRuntimeEnvPassword) {
         throw new Error(
             '无法持久化密码：请配置 SQLite/D1，或设置环境变量 / config.yaml 中的 adminPassword'
         );

@@ -4,12 +4,16 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { applyConfigToProcessEnv, loadLocalConfigFile } from './config-loader.js';
 import { createLocalEnv, resolveDbPath, resolveStaticDir } from './env.js';
+import { isUsingDefaultPassword } from '../functions/modules/utils.js';
 
 const loadedConfig = loadLocalConfigFile();
 applyConfigToProcessEnv(loadedConfig.data || {});
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
+// 全局请求体上限：readJsonWithLimit 只保护会解析 JSON 的端点，
+// 这里在适配层兜底，防止向任意路径 POST 超大 body 打爆内存。
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
 
 function nodeHeadersToWeb(headers) {
     const out = new Headers();
@@ -36,8 +40,23 @@ async function expressToFetchRequest(req) {
     const init = { method, headers };
 
     if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
+        const contentLength = Number(req.headers['content-length'] || 0);
+        if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+            const error = new Error('Request body too large');
+            error.status = 413;
+            throw error;
+        }
         const chunks = [];
-        for await (const chunk of req) chunks.push(chunk);
+        let total = 0;
+        for await (const chunk of req) {
+            total += chunk.length;
+            if (total > MAX_REQUEST_BODY_BYTES) {
+                const error = new Error('Request body too large');
+                error.status = 413;
+                throw error;
+            }
+            chunks.push(chunk);
+        }
         const body = Buffer.concat(chunks);
         if (body.length > 0) {
             init.body = body;
@@ -50,9 +69,8 @@ async function expressToFetchRequest(req) {
 
 async function sendFetchResponse(res, response) {
     res.status(response.status);
-    const setCookies = typeof response.headers.getSetCookie === 'function'
-        ? response.headers.getSetCookie()
-        : [];
+    const setCookies =
+        typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
 
     response.headers.forEach((value, key) => {
         if (key.toLowerCase() === 'set-cookie') return;
@@ -79,11 +97,22 @@ function createStaticFetcher(staticDir) {
     return {
         async fetch(request) {
             const url = new URL(request.url);
-            let pathname = decodeURIComponent(url.pathname);
+            let pathname;
+            try {
+                pathname = decodeURIComponent(url.pathname);
+            } catch {
+                // 形如 /x%zz.js 的非法编码：按 404 处理而不是抛 500
+                return new Response('Not Found', { status: 404 });
+            }
             if (pathname === '/') pathname = '/index.html';
+            if (pathname.includes('\0')) {
+                return new Response('Not Found', { status: 404 });
+            }
 
-            const candidate = path.normalize(path.join(staticDir, pathname));
-            if (!candidate.startsWith(path.normalize(staticDir))) {
+            const staticRoot = path.normalize(staticDir);
+            const candidate = path.normalize(path.join(staticRoot, pathname));
+            // [安全] 前缀比较必须带分隔符，否则 dist-old/ 这类同级目录也能通过检查
+            if (candidate !== staticRoot && !candidate.startsWith(staticRoot + path.sep)) {
                 return new Response('Forbidden', { status: 403 });
             }
 
@@ -105,17 +134,18 @@ function createStaticFetcher(staticDir) {
                 '.ico': 'image/x-icon',
                 '.woff': 'font/woff',
                 '.woff2': 'font/woff2',
-                '.map': 'application/json'
+                '.map': 'application/json',
             };
 
             return new Response(data, {
                 status: 200,
                 headers: {
                     'Content-Type': typeMap[ext] || 'application/octet-stream',
-                    'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=31536000, immutable'
-                }
+                    'Cache-Control':
+                        ext === '.html' ? 'no-store' : 'public, max-age=31536000, immutable',
+                },
             });
-        }
+        },
     };
 }
 
@@ -134,6 +164,28 @@ async function main() {
     const env = createLocalEnv({ staticDir, configLoaded: loadedConfig });
     env.ASSETS = createStaticFetcher(staticDir);
 
+    // [安全] 仍使用默认密码 admin 时，生成一次性 Setup Token 并打印到控制台。
+    // POST /api/setup 必须携带该 token，防止公网部署后被人扫描抢占初始化。
+    try {
+        if (await isUsingDefaultPassword(env)) {
+            const setupToken = crypto.randomUUID().replace(/-/g, '');
+            env.MISUB_SETUP_TOKEN = setupToken;
+            console.log('');
+            console.log(
+                '[MiSub-lite] ============================================================'
+            );
+            console.log('[MiSub-lite]  ⚠ 当前使用默认管理员密码 admin（首次启动未配置）');
+            console.log('[MiSub-lite]  🔑 首次初始化 Setup Token（向导页需要，请勿泄露）:');
+            console.log(`[MiSub-lite]     ${setupToken}`);
+            console.log(
+                '[MiSub-lite] ============================================================'
+            );
+            console.log('');
+        }
+    } catch (error) {
+        console.warn('[MiSub-lite] Setup Token 生成检查失败:', error?.message || error);
+    }
+
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', true);
@@ -150,28 +202,42 @@ async function main() {
                         console.error('[waitUntil]', error);
                     });
                 },
-                passThroughOnException() {}
+                passThroughOnException() {},
             };
 
             const response = await onRequest(context);
             await sendFetchResponse(res, response);
         } catch (error) {
+            if (error?.status === 413) {
+                res.status(413).json({ error: 'Request body too large' });
+                return;
+            }
             console.error('[Local Server Error]', error);
             res.status(500).json({
                 error: 'Internal Server Error',
-                message: error?.message || String(error)
+                message: error?.message || String(error),
             });
         }
     });
 
     app.listen(PORT, HOST, () => {
-        const hasPwd = !!(env.ADMIN_PASSWORD || loadedConfig.data?.adminPassword || loadedConfig.data?.password);
+        const hasPwd = !!(
+            env.ADMIN_PASSWORD ||
+            loadedConfig.data?.adminPassword ||
+            loadedConfig.data?.password
+        );
         const displayHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
         console.log(`[MiSub-lite] listen ${HOST}:${PORT}  →  http://${displayHost}:${PORT}`);
         console.log(`[MiSub-lite] sqlite: ${resolveDbPath()}`);
-        console.log(`[MiSub-lite] config: ${loadedConfig.path || '(none, copy config.example.yaml → config.yaml or use setup wizard)'}`);
-        console.log(`[MiSub-lite] admin password source: ${hasPwd ? 'config/env' : 'default(admin) — open setup wizard'}`);
-        console.log(`[MiSub-lite] static: ${staticDir}${fs.existsSync(staticDir) ? '' : ' (missing, run npm run build)'}`);
+        console.log(
+            `[MiSub-lite] config: ${loadedConfig.path || '(none, copy config.example.yaml → config.yaml or use setup wizard)'}`
+        );
+        console.log(
+            `[MiSub-lite] admin password source: ${hasPwd ? 'config/env' : 'default(admin) — open setup wizard'}`
+        );
+        console.log(
+            `[MiSub-lite] static: ${staticDir}${fs.existsSync(staticDir) ? '' : ' (missing, run npm run build)'}`
+        );
     });
 }
 
